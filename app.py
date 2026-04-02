@@ -20,12 +20,25 @@ app = FastAPI()
 
 CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH", "credentials.json")
 RESULTS_TAB = os.getenv("RESULTS_TAB", "Estado_Reseñas")
-MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_CHECKS", "5"))
-DELAY = float(os.getenv("DELAY_BETWEEN_CHECKS", "0.5"))
+MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_CHECKS", "3"))
+DELAY = float(os.getenv("DELAY_BETWEEN_CHECKS", "1.5"))
 
 
 def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _empty_counters() -> dict:
+    return {"activas": 0, "eliminadas": 0, "inciertas": 0}
+
+
+def _count(counters: dict, status: str) -> None:
+    if status == "ACTIVA":
+        counters["activas"] += 1
+    elif status == "ELIMINADA":
+        counters["eliminadas"] += 1
+    else:
+        counters["inciertas"] += 1
 
 
 async def run_agent(sheet_url: str) -> AsyncGenerator[str, None]:
@@ -71,19 +84,14 @@ async def run_agent(sheet_url: str) -> AsyncGenerator[str, None]:
 
     yield sse({"type": "status", "message": f"Verificando {total} reseñas..."})
 
-    counters = {"activas": 0, "eliminadas": 0, "errores": 0}
+    counters = _empty_counters()
     results = []
     current = 0
 
     async for result in check_reviews_stream(url_items, MAX_CONCURRENT, DELAY):
         current += 1
-        status = result.get("status", "ERROR")
-        if status == "ACTIVA":
-            counters["activas"] += 1
-        elif status == "ELIMINADA":
-            counters["eliminadas"] += 1
-        else:
-            counters["errores"] += 1
+        status = result.get("status", "INCIERTA")
+        _count(counters, status)
         results.append(result)
 
         yield sse({
@@ -93,6 +101,7 @@ async def run_agent(sheet_url: str) -> AsyncGenerator[str, None]:
             "status": status,
             "url": result.get("url", "")[:80],
             "detail": result.get("detail", ""),
+            "evidence": result.get("evidence", []),
             **counters,
         })
 
@@ -126,19 +135,14 @@ async def run_direct(urls: list[str]) -> AsyncGenerator[str, None]:
     yield sse({"type": "total", "total": total})
     yield sse({"type": "status", "message": f"Iniciando verificación de {total} URLs..."})
 
-    counters = {"activas": 0, "eliminadas": 0, "errores": 0}
+    counters = _empty_counters()
     results = []
     current = 0
 
     async for result in check_reviews_stream(url_items, MAX_CONCURRENT, DELAY):
         current += 1
-        status = result.get("status", "ERROR")
-        if status == "ACTIVA":
-            counters["activas"] += 1
-        elif status == "ELIMINADA":
-            counters["eliminadas"] += 1
-        else:
-            counters["errores"] += 1
+        status = result.get("status", "INCIERTA")
+        _count(counters, status)
         results.append(result)
 
         yield sse({
@@ -148,11 +152,17 @@ async def run_direct(urls: list[str]) -> AsyncGenerator[str, None]:
             "status": status,
             "url": result.get("url", "")[:80],
             "detail": result.get("detail", ""),
+            "evidence": result.get("evidence", []),
             **counters,
         })
 
     rows_output = [
-        {"url": r.get("url", ""), "status": r.get("status", "ERROR"), "detail": r.get("detail", "")}
+        {
+            "url": r.get("url", ""),
+            "status": r.get("status", "INCIERTA"),
+            "detail": r.get("detail", ""),
+            "evidence": r.get("evidence", []),
+        }
         for r in results if r
     ]
 
