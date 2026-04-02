@@ -6,174 +6,52 @@
   <title>RS Plus — Verificador de Reseñas</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #f0f2f5;
-      min-height: 100vh;
-      display: flex;
-      align-items: flex-start;
-      justify-content: center;
-      padding: 40px 16px;
+      background: #f0f2f5; min-height: 100vh;
+      display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px;
     }
-
     .container { width: 100%; max-width: 760px; }
-
-    .card {
-      background: white;
-      border-radius: 16px;
-      padding: 32px;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-      margin-bottom: 20px;
-    }
-
+    .card { background: white; border-radius: 16px; padding: 32px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 20px; }
     h1 { font-size: 22px; font-weight: 700; color: #1a1a2e; margin-bottom: 4px; }
     .subtitle { color: #6b7280; font-size: 14px; margin-bottom: 24px; }
-
-    /* Tabs */
-    .tabs {
-      display: flex;
-      gap: 4px;
-      background: #f3f4f6;
-      border-radius: 10px;
-      padding: 4px;
-      margin-bottom: 20px;
-    }
-
-    .tab-btn {
-      flex: 1;
-      padding: 9px 16px;
-      border: none;
-      border-radius: 8px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      background: transparent;
-      color: #6b7280;
-      transition: all 0.2s;
-    }
-
-    .tab-btn.active {
-      background: white;
-      color: #4f46e5;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.1);
-    }
-
+    .tabs { display: flex; gap: 4px; background: #f3f4f6; border-radius: 10px; padding: 4px; margin-bottom: 20px; }
+    .tab-btn { flex: 1; padding: 9px 16px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; background: transparent; color: #6b7280; transition: all 0.2s; }
+    .tab-btn.active { background: white; color: #4f46e5; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
     .tab-panel { display: none; }
     .tab-panel.active { display: block; }
-
-    /* Input Sheet */
     .input-row { display: flex; gap: 10px; }
-
-    input[type="text"] {
-      flex: 1;
-      padding: 12px 16px;
-      border: 2px solid #e5e7eb;
-      border-radius: 10px;
-      font-size: 14px;
-      outline: none;
-      transition: border-color 0.2s;
-    }
-
+    input[type="text"] { flex: 1; padding: 12px 16px; border: 2px solid #e5e7eb; border-radius: 10px; font-size: 14px; outline: none; transition: border-color 0.2s; }
     input[type="text"]:focus { border-color: #4f46e5; }
-
-    /* Textarea URLs */
-    textarea#direct-urls {
-      width: 100%;
-      height: 160px;
-      padding: 12px 16px;
-      border: 2px solid #e5e7eb;
-      border-radius: 10px;
-      font-size: 13px;
-      font-family: "Menlo", "Consolas", monospace;
-      resize: vertical;
-      outline: none;
-      transition: border-color 0.2s;
-      margin-bottom: 10px;
-      line-height: 1.6;
-    }
-
+    textarea#direct-urls { width: 100%; height: 160px; padding: 12px 16px; border: 2px solid #e5e7eb; border-radius: 10px; font-size: 13px; font-family: "Menlo", "Consolas", monospace; resize: vertical; outline: none; transition: border-color 0.2s; margin-bottom: 10px; line-height: 1.6; }
     textarea#direct-urls:focus { border-color: #4f46e5; }
-
     .url-hint { font-size: 12px; color: #9ca3af; margin-bottom: 10px; }
-
-    .btn-check {
-      padding: 12px 24px;
-      background: #4f46e5;
-      color: white;
-      border: none;
-      border-radius: 10px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.2s, opacity 0.2s;
-      white-space: nowrap;
-    }
-
+    .btn-check { padding: 12px 24px; background: #4f46e5; color: white; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.2s, opacity 0.2s; white-space: nowrap; }
     .btn-check:hover { background: #4338ca; }
     .btn-check:disabled { opacity: 0.5; cursor: not-allowed; }
-
-    /* Contadores */
-    .counters {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 12px;
-      margin-bottom: 24px;
-    }
-
+    .counters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
     .counter-box { border-radius: 12px; padding: 16px; text-align: center; }
     .counter-box.total   { background: #f3f4f6; }
     .counter-box.active  { background: #ecfdf5; }
     .counter-box.deleted { background: #fef2f2; }
     .counter-box.error   { background: #fffbeb; }
-
     .counter-num { font-size: 32px; font-weight: 800; line-height: 1; margin-bottom: 4px; }
     .counter-box.total   .counter-num { color: #374151; }
     .counter-box.active  .counter-num { color: #059669; }
     .counter-box.deleted .counter-num { color: #dc2626; }
     .counter-box.error   .counter-num { color: #d97706; }
-
     .counter-label { font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
     .counter-box.total   .counter-label { color: #6b7280; }
     .counter-box.active  .counter-label { color: #065f46; }
     .counter-box.deleted .counter-label { color: #991b1b; }
     .counter-box.error   .counter-label { color: #92400e; }
-
-    /* Progreso */
     .progress-section { display: none; }
     .progress-section.visible { display: block; }
-
-    .progress-bar-track {
-      background: #e5e7eb;
-      border-radius: 999px;
-      height: 8px;
-      overflow: hidden;
-      margin-bottom: 8px;
-    }
-
-    .progress-bar-fill {
-      height: 100%;
-      background: linear-gradient(90deg, #4f46e5, #7c3aed);
-      border-radius: 999px;
-      transition: width 0.3s ease;
-      width: 0%;
-    }
-
+    .progress-bar-track { background: #e5e7eb; border-radius: 999px; height: 8px; overflow: hidden; margin-bottom: 8px; }
+    .progress-bar-fill { height: 100%; background: linear-gradient(90deg, #4f46e5, #7c3aed); border-radius: 999px; transition: width 0.3s ease; width: 0%; }
     .progress-label { font-size: 13px; color: #6b7280; margin-bottom: 20px; }
-
     .log-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px; }
-
-    .log-box {
-      background: #0f172a;
-      border-radius: 10px;
-      padding: 16px;
-      height: 220px;
-      overflow-y: auto;
-      font-family: "Menlo", "Consolas", monospace;
-      font-size: 12px;
-      line-height: 1.6;
-    }
-
+    .log-box { background: #0f172a; border-radius: 10px; padding: 16px; height: 220px; overflow-y: auto; font-family: "Menlo", "Consolas", monospace; font-size: 12px; line-height: 1.6; }
     .log-line { display: flex; gap: 8px; }
     .log-icon { flex-shrink: 0; }
     .log-text { color: #94a3b8; word-break: break-all; }
@@ -181,81 +59,24 @@
     .log-line.eliminada .log-text { color: #f87171; }
     .log-line.error     .log-text { color: #fbbf24; }
     .log-line.info      .log-text { color: #60a5fa; }
-
-    /* Resultado final */
-    .result-card {
-      display: none;
-      background: #f0fdf4;
-      border: 2px solid #bbf7d0;
-      border-radius: 12px;
-      padding: 20px 24px;
-    }
-
+    .result-card { display: none; background: #f0fdf4; border: 2px solid #bbf7d0; border-radius: 12px; padding: 20px 24px; }
     .result-card.visible { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
     .result-card.error-card { background: #fef2f2; border-color: #fecaca; }
-
     .result-text { font-size: 14px; color: #166534; font-weight: 500; }
     .result-card.error-card .result-text { color: #991b1b; }
-
-    .btn-sheet {
-      padding: 10px 18px;
-      background: #059669;
-      color: white;
-      border: none;
-      border-radius: 8px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      text-decoration: none;
-      white-space: nowrap;
-      transition: background 0.2s;
-    }
-
+    .btn-sheet { padding: 10px 18px; background: #059669; color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; text-decoration: none; white-space: nowrap; transition: background 0.2s; }
     .btn-sheet:hover { background: #047857; }
-
-    /* Tabla de resultados directos */
     .results-table-wrap { display: none; margin-top: 20px; }
     .results-table-wrap.visible { display: block; }
-
     .results-table-wrap h3 { font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 10px; }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-    }
-
-    th {
-      background: #f3f4f6;
-      padding: 8px 12px;
-      text-align: left;
-      font-weight: 600;
-      color: #374151;
-      border-bottom: 2px solid #e5e7eb;
-    }
-
-    td {
-      padding: 8px 12px;
-      border-bottom: 1px solid #f3f4f6;
-      color: #4b5563;
-      word-break: break-all;
-    }
-
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { background: #f3f4f6; padding: 8px 12px; text-align: left; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; }
+    td { padding: 8px 12px; border-bottom: 1px solid #f3f4f6; color: #4b5563; word-break: break-all; }
     tr:hover td { background: #f9fafb; }
-
-    .badge {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 999px;
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-    }
-
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
     .badge.ACTIVA    { background: #d1fae5; color: #065f46; }
     .badge.ELIMINADA { background: #fee2e2; color: #991b1b; }
     .badge.ERROR     { background: #fef3c7; color: #92400e; }
-
     @media (max-width: 500px) {
       .counters { grid-template-columns: repeat(2, 1fr); }
       .input-row { flex-direction: column; }
@@ -264,292 +85,162 @@
 </head>
 <body>
 <div class="container">
-
-  <!-- Cabecera -->
   <div class="card">
     <h1>Verificador de Reseñas Google</h1>
     <p class="subtitle">Comprueba qué reseñas siguen activas y cuáles han sido eliminadas.</p>
-
-    <!-- Tabs -->
     <div class="tabs">
       <button class="tab-btn active" onclick="switchTab('sheet')">Google Sheets</button>
       <button class="tab-btn" onclick="switchTab('direct')">URLs directas</button>
     </div>
-
-    <!-- Tab: Google Sheets -->
     <div class="tab-panel active" id="panel-sheet">
       <div class="input-row">
         <input type="text" id="sheet-url" placeholder="https://docs.google.com/spreadsheets/d/..." />
         <button class="btn-check" id="btn-check-sheet" onclick="startCheckSheet()">Comprobar</button>
       </div>
     </div>
-
-    <!-- Tab: URLs directas -->
     <div class="tab-panel" id="panel-direct">
       <p class="url-hint">Pega una URL por línea:</p>
-      <textarea id="direct-urls" placeholder="https://maps.app.goo.gl/abc123&#10;https://maps.app.goo.gl/def456&#10;https://maps.app.goo.gl/ghi789"></textarea>
+      <textarea id="direct-urls" placeholder="https://maps.app.goo.gl/abc123&#10;https://maps.app.goo.gl/def456"></textarea>
       <button class="btn-check" id="btn-check-direct" onclick="startCheckDirect()">Comprobar</button>
     </div>
   </div>
-
-  <!-- Contadores -->
   <div class="card">
     <div class="counters">
-      <div class="counter-box total">
-        <div class="counter-num" id="cnt-total">—</div>
-        <div class="counter-label">Total</div>
-      </div>
-      <div class="counter-box active">
-        <div class="counter-num" id="cnt-activas">—</div>
-        <div class="counter-label">Activas</div>
-      </div>
-      <div class="counter-box deleted">
-        <div class="counter-num" id="cnt-eliminadas">—</div>
-        <div class="counter-label">Eliminadas</div>
-      </div>
-      <div class="counter-box error">
-        <div class="counter-num" id="cnt-errores">—</div>
-        <div class="counter-label">Errores</div>
-      </div>
+      <div class="counter-box total"><div class="counter-num" id="cnt-total">—</div><div class="counter-label">Total</div></div>
+      <div class="counter-box active"><div class="counter-num" id="cnt-activas">—</div><div class="counter-label">Activas</div></div>
+      <div class="counter-box deleted"><div class="counter-num" id="cnt-eliminadas">—</div><div class="counter-label">Eliminadas</div></div>
+      <div class="counter-box error"><div class="counter-num" id="cnt-errores">—</div><div class="counter-label">Errores</div></div>
     </div>
-
-    <!-- Progreso -->
     <div class="progress-section" id="progress-section">
-      <div class="progress-bar-track">
-        <div class="progress-bar-fill" id="progress-bar"></div>
-      </div>
+      <div class="progress-bar-track"><div class="progress-bar-fill" id="progress-bar"></div></div>
       <div class="progress-label" id="progress-label">Iniciando...</div>
       <div class="log-title">Registro en tiempo real</div>
       <div class="log-box" id="log-box"></div>
     </div>
   </div>
-
-  <!-- Resultado final (Sheet) -->
   <div class="result-card" id="result-card">
     <span class="result-text" id="result-text"></span>
     <a class="btn-sheet" id="result-link" href="#" target="_blank">Ver en Google Sheets →</a>
   </div>
-
-  <!-- Tabla resultados directos -->
   <div class="card results-table-wrap" id="results-table-wrap">
-    <h3 id="table-title">Resultados</h3>
-    <table id="results-table">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>URL</th>
-          <th>Estado</th>
-          <th>Detalle</th>
-        </tr>
-      </thead>
-      <tbody id="results-tbody"></tbody>
-    </table>
+    <h3>Resultados</h3>
+    <table><thead><tr><th>#</th><th>URL</th><th>Estado</th><th>Detalle</th></tr></thead>
+    <tbody id="results-tbody"></tbody></table>
   </div>
-
 </div>
-
 <script>
   let eventSource = null;
-  let currentTab = "sheet";
-
   function switchTab(tab) {
-    currentTab = tab;
-    document.querySelectorAll(".tab-btn").forEach((b, i) => {
-      b.classList.toggle("active", (i === 0 && tab === "sheet") || (i === 1 && tab === "direct"));
-    });
-    document.getElementById("panel-sheet").classList.toggle("active", tab === "sheet");
-    document.getElementById("panel-direct").classList.toggle("active", tab === "direct");
+    document.querySelectorAll(".tab-btn").forEach((b,i) => b.classList.toggle("active",(i===0&&tab==="sheet")||(i===1&&tab==="direct")));
+    document.getElementById("panel-sheet").classList.toggle("active",tab==="sheet");
+    document.getElementById("panel-direct").classList.toggle("active",tab==="direct");
   }
-
   function startCheckSheet() {
     const url = document.getElementById("sheet-url").value.trim();
     if (!url) { alert("Pega la URL de tu hoja de Google Sheets."); return; }
-    resetUI();
-    setButtonsDisabled(true);
+    resetUI(); setButtonsDisabled(true);
     document.getElementById("progress-section").classList.add("visible");
-
     if (eventSource) eventSource.close();
     eventSource = new EventSource(`/check?sheet_url=${encodeURIComponent(url)}`);
-    eventSource.onmessage = (e) => handleEvent(JSON.parse(e.data), "sheet");
-    eventSource.onerror = () => {
-      addLog("error", "⚠", "Conexión interrumpida.");
-      setButtonsDisabled(false);
-      eventSource.close();
-    };
+    eventSource.onmessage = (e) => handleEvent(JSON.parse(e.data),"sheet");
+    eventSource.onerror = () => { addLog("error","⚠","Conexión interrumpida."); setButtonsDisabled(false); eventSource.close(); };
   }
-
   async function startCheckDirect() {
     const raw = document.getElementById("direct-urls").value.trim();
     if (!raw) { alert("Pega al menos una URL."); return; }
-    const urls = raw.split("\n").map(u => u.trim()).filter(u => u.length > 0);
-    if (urls.length === 0) { alert("No se encontraron URLs válidas."); return; }
-
-    resetUI();
-    setButtonsDisabled(true);
+    const urls = raw.split("\n").map(u=>u.trim()).filter(u=>u.length>0);
+    if (urls.length===0) { alert("No se encontraron URLs."); return; }
+    resetUI(); setButtonsDisabled(true);
     document.getElementById("progress-section").classList.add("visible");
-
     try {
-      const response = await fetch("/check-direct", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ urls }),
-      });
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop();
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              handleEvent(data, "direct");
-            } catch {}
-          }
-        }
+      const response = await fetch("/check-direct",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({urls})});
+      const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer="";
+      while(true) {
+        const {done,value} = await reader.read(); if(done) break;
+        buffer += decoder.decode(value,{stream:true});
+        const lines = buffer.split("\n"); buffer = lines.pop();
+        for(const line of lines) { if(line.startsWith("data: ")) { try { handleEvent(JSON.parse(line.slice(6)),"direct"); } catch{} } }
       }
-    } catch (err) {
-      addLog("error", "⚠", "Error de conexión: " + err.message);
-    }
+    } catch(err) { addLog("error","⚠","Error: "+err.message); }
     setButtonsDisabled(false);
   }
-
-  function handleEvent(data, mode) {
-    switch (data.type) {
-      case "status":
-        addLog("info", "ℹ", data.message);
-        document.getElementById("progress-label").textContent = data.message;
-        break;
-
-      case "total":
-        document.getElementById("cnt-total").textContent = data.total;
-        document.getElementById("cnt-activas").textContent = "0";
-        document.getElementById("cnt-eliminadas").textContent = "0";
-        document.getElementById("cnt-errores").textContent = "0";
-        break;
-
+  function handleEvent(data,mode) {
+    switch(data.type) {
+      case "status": addLog("info","ℹ",data.message); document.getElementById("progress-label").textContent=data.message; break;
+      case "total": document.getElementById("cnt-total").textContent=data.total; document.getElementById("cnt-activas").textContent="0"; document.getElementById("cnt-eliminadas").textContent="0"; document.getElementById("cnt-errores").textContent="0"; break;
       case "progress":
-        updateCounters(data);
-        updateProgress(data.current, data.total);
-        const icon = data.status === "ACTIVA" ? "✓" : data.status === "ELIMINADA" ? "✗" : "?";
-        addLog(data.status.toLowerCase(), icon, `[${data.current}/${data.total}] ${data.status} — ${data.url}`);
-        break;
-
+        updateCounters(data); updateProgress(data.current,data.total);
+        const icon=data.status==="ACTIVA"?"✓":data.status==="ELIMINADA"?"✗":"?";
+        addLog(data.status.toLowerCase(),icon,`[${data.current}/${data.total}] ${data.status} — ${data.url}`); break;
       case "done":
-        updateCounters(data);
-        updateProgress(data.total, data.total);
-        document.getElementById("progress-label").textContent = "¡Verificación completada!";
-        if (mode === "sheet" && data.sheet_url) {
-          showResultSheet(data);
-        } else if (mode === "direct" && data.rows) {
-          showResultDirect(data);
-        } else {
-          showResultSheet(data);
-        }
-        setButtonsDisabled(false);
-        if (eventSource) eventSource.close();
-        break;
-
+        updateCounters(data); updateProgress(data.total,data.total);
+        document.getElementById("progress-label").textContent="¡Verificación completada!";
+        if(mode==="direct"&&data.rows) showResultDirect(data); else showResultSheet(data);
+        setButtonsDisabled(false); if(eventSource) eventSource.close(); break;
       case "error":
-        addLog("error", "✗", data.message);
-        document.getElementById("progress-label").textContent = "Error: " + data.message;
-        showError(data.message);
-        setButtonsDisabled(false);
-        if (eventSource) eventSource.close();
-        break;
+        addLog("error","✗",data.message);
+        document.getElementById("progress-label").textContent="Error: "+data.message;
+        showError(data.message); setButtonsDisabled(false); if(eventSource) eventSource.close(); break;
     }
   }
-
   function updateCounters(data) {
-    if (data.total !== undefined) document.getElementById("cnt-total").textContent = data.total;
-    if (data.activas !== undefined) document.getElementById("cnt-activas").textContent = data.activas;
-    if (data.eliminadas !== undefined) document.getElementById("cnt-eliminadas").textContent = data.eliminadas;
-    if (data.errores !== undefined) document.getElementById("cnt-errores").textContent = data.errores;
+    if(data.total!==undefined) document.getElementById("cnt-total").textContent=data.total;
+    if(data.activas!==undefined) document.getElementById("cnt-activas").textContent=data.activas;
+    if(data.eliminadas!==undefined) document.getElementById("cnt-eliminadas").textContent=data.eliminadas;
+    if(data.errores!==undefined) document.getElementById("cnt-errores").textContent=data.errores;
   }
-
-  function updateProgress(current, total) {
-    const pct = total > 0 ? Math.round((current / total) * 100) : 0;
-    document.getElementById("progress-bar").style.width = pct + "%";
-    document.getElementById("progress-label").textContent = `Verificando... ${current} de ${total} (${pct}%)`;
+  function updateProgress(current,total) {
+    const pct=total>0?Math.round((current/total)*100):0;
+    document.getElementById("progress-bar").style.width=pct+"%";
+    document.getElementById("progress-label").textContent=`Verificando... ${current} de ${total} (${pct}%)`;
   }
-
-  function addLog(type, icon, text) {
-    const box = document.getElementById("log-box");
-    const line = document.createElement("div");
-    line.className = `log-line ${type}`;
-    line.innerHTML = `<span class="log-icon">${icon}</span><span class="log-text">${escapeHtml(text)}</span>`;
-    box.appendChild(line);
-    box.scrollTop = box.scrollHeight;
+  function addLog(type,icon,text) {
+    const box=document.getElementById("log-box"); const line=document.createElement("div");
+    line.className=`log-line ${type}`;
+    line.innerHTML=`<span class="log-icon">${icon}</span><span class="log-text">${escapeHtml(text)}</span>`;
+    box.appendChild(line); box.scrollTop=box.scrollHeight;
   }
-
   function showResultSheet(data) {
-    const card = document.getElementById("result-card");
-    card.classList.add("visible");
-    document.getElementById("result-text").textContent =
-      `Listo. ${data.activas} activas · ${data.eliminadas} eliminadas · ${data.errores} errores. Resultados guardados en "${data.results_tab}".`;
-    const link = document.getElementById("result-link");
-    if (data.sheet_url) { link.href = data.sheet_url; link.style.display = ""; }
-    else link.style.display = "none";
+    const card=document.getElementById("result-card"); card.classList.add("visible");
+    document.getElementById("result-text").textContent=`Listo. ${data.activas} activas · ${data.eliminadas} eliminadas · ${data.errores} errores${data.results_tab?' — guardado en "'+data.results_tab+'"':''}.`;
+    const link=document.getElementById("result-link");
+    if(data.sheet_url){link.href=data.sheet_url;link.style.display="";}else link.style.display="none";
   }
-
   function showResultDirect(data) {
-    const card = document.getElementById("result-card");
-    card.classList.add("visible");
-    document.getElementById("result-text").textContent =
-      `Listo. ${data.activas} activas · ${data.eliminadas} eliminadas · ${data.errores} errores.`;
-    document.getElementById("result-link").style.display = "none";
-
-    // Construir tabla
-    const tbody = document.getElementById("results-tbody");
-    tbody.innerHTML = "";
-    (data.rows || []).forEach((row, i) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${i + 1}</td>
-        <td><a href="${escapeHtml(row.url)}" target="_blank" style="color:#4f46e5">${escapeHtml(row.url)}</a></td>
-        <td><span class="badge ${row.status}">${row.status}</span></td>
-        <td>${escapeHtml(row.detail || "")}</td>
-      `;
+    const card=document.getElementById("result-card"); card.classList.add("visible");
+    document.getElementById("result-text").textContent=`Listo. ${data.activas} activas · ${data.eliminadas} eliminadas · ${data.errores} errores.`;
+    document.getElementById("result-link").style.display="none";
+    const tbody=document.getElementById("results-tbody"); tbody.innerHTML="";
+    (data.rows||[]).forEach((row,i)=>{
+      const tr=document.createElement("tr");
+      tr.innerHTML=`<td>${i+1}</td><td><a href="${escapeHtml(row.url)}" target="_blank" style="color:#4f46e5">${escapeHtml(row.url)}</a></td><td><span class="badge ${row.status}">${row.status}</span></td><td>${escapeHtml(row.detail||'')}</td>`;
       tbody.appendChild(tr);
     });
     document.getElementById("results-table-wrap").classList.add("visible");
   }
-
   function showError(message) {
-    const card = document.getElementById("result-card");
-    card.classList.add("visible", "error-card");
-    document.getElementById("result-text").textContent = "Error: " + message;
-    document.getElementById("result-link").style.display = "none";
+    const card=document.getElementById("result-card"); card.classList.add("visible","error-card");
+    document.getElementById("result-text").textContent="Error: "+message;
+    document.getElementById("result-link").style.display="none";
   }
-
   function resetUI() {
-    document.getElementById("cnt-total").textContent = "—";
-    document.getElementById("cnt-activas").textContent = "—";
-    document.getElementById("cnt-eliminadas").textContent = "—";
-    document.getElementById("cnt-errores").textContent = "—";
-    document.getElementById("log-box").innerHTML = "";
-    document.getElementById("progress-bar").style.width = "0%";
-    document.getElementById("progress-label").textContent = "Iniciando...";
-    document.getElementById("result-card").classList.remove("visible", "error-card");
-    document.getElementById("result-link").style.display = "";
+    document.getElementById("cnt-total").textContent="—";
+    document.getElementById("cnt-activas").textContent="—";
+    document.getElementById("cnt-eliminadas").textContent="—";
+    document.getElementById("cnt-errores").textContent="—";
+    document.getElementById("log-box").innerHTML="";
+    document.getElementById("progress-bar").style.width="0%";
+    document.getElementById("progress-label").textContent="Iniciando...";
+    document.getElementById("result-card").classList.remove("visible","error-card");
+    document.getElementById("result-link").style.display="";
     document.getElementById("results-table-wrap").classList.remove("visible");
-    document.getElementById("results-tbody").innerHTML = "";
+    document.getElementById("results-tbody").innerHTML="";
   }
-
   function setButtonsDisabled(val) {
-    document.getElementById("btn-check-sheet").disabled = val;
-    document.getElementById("btn-check-direct").disabled = val;
+    document.getElementById("btn-check-sheet").disabled=val;
+    document.getElementById("btn-check-direct").disabled=val;
   }
-
-  function escapeHtml(text) {
-    return String(text).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-  }
+  function escapeHtml(text) { return String(text).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 </script>
 </body>
 </html>
