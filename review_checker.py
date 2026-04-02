@@ -29,7 +29,6 @@ USER_AGENT = (
 )
 
 # ─── Frases que Google Maps muestra cuando la reseña fue eliminada ────────────
-# Se comprueban en minúsculas contra el texto visible de la página.
 DELETED_PHRASES: list[tuple[str, str]] = [
     ("no longer available",         "EN: 'no longer available'"),
     ("review is no longer",         "EN: 'review is no longer'"),
@@ -39,11 +38,9 @@ DELETED_PHRASES: list[tuple[str, str]] = [
     ("cette avis n'est plus",       "FR: 'cette avis n'est plus'"),
     ("cette critique n'est plus",   "FR: 'cette critique n'est plus'"),
     ("diese rezension ist nicht",   "DE: 'diese rezension ist nicht'"),
-    ("не доступна",                 "RU: 'не доступна'"),
 ]
 
 # ─── Selectores CSS que aparecen SOLO si hay contenido de reseña activa ───────
-# Se prueban en orden; basta uno positivo.
 ACTIVE_STAR_SELECTORS = [
     "span[aria-label$=' stars']",
     "span[aria-label$=' star']",
@@ -56,16 +53,11 @@ ACTIVE_STAR_SELECTORS = [
     "[aria-label*='rating of']",
 ]
 
-# Patrón en texto visible para puntuación de reseña (ej: "4,5 estrellas", "5 stars")
 STAR_TEXT_RE = re.compile(r"\b\d[,.]?\d?\s*(estrellas?|stars?)\b", re.IGNORECASE)
 
-# ─── Condición JS para wait_for_function ─────────────────────────────────────
-# Espera hasta que aparezca UNA señal clara (eliminación O estrellas de review).
-# No usa longitud del body.
 _WAIT_CONDITION_JS = """() => {
     const text = (document.body && document.body.innerText || '').toLowerCase();
 
-    // Señal negativa: mensaje de eliminación
     if (text.includes('no longer available')
         || text.includes('review is no longer')
         || text.includes('ya no está disponible')
@@ -74,7 +66,6 @@ _WAIT_CONDITION_JS = """() => {
         return true;
     }
 
-    // Señal positiva: elemento de estrellas con aria-label
     const labeled = document.querySelectorAll('[aria-label]');
     for (const el of labeled) {
         const lbl = (el.getAttribute('aria-label') || '').toLowerCase();
@@ -89,18 +80,16 @@ _WAIT_CONDITION_JS = """() => {
     return false;
 }"""
 
-# ─── Selectores de pantallas de consentimiento GDPR ──────────────────────────
 _CONSENT_SELECTORS = [
     "button[aria-label='Accept all']",
     "button[aria-label='Aceptar todo']",
     "button[aria-label='Tout accepter']",
     "form[action*='consent'] button:last-of-type",
-    "#L2AGLb",  # ID habitual del botón "Acepto" en Google Consent
+    "#L2AGLb",
 ]
 
 
 async def _dismiss_consent(page: Page) -> None:
-    """Descarta pantalla de consentimiento GDPR si aparece."""
     for sel in _CONSENT_SELECTORS:
         try:
             btn = await page.query_selector(sel)
@@ -113,20 +102,11 @@ async def _dismiss_consent(page: Page) -> None:
 
 
 async def _check_single_review(page: Page, url: str) -> dict:
-    """
-    Comprueba una URL y devuelve:
-      status  : ACTIVA | ELIMINADA | INCIERTA
-      detail  : motivo legible por humanos
-      evidence: lista de señales encontradas (para logs)
-      final_url: URL tras redirecciones
-    """
     final_url = url
     try:
-        # ── Fase 1: Navegación ────────────────────────────────────────────────
         response = await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
         final_url = page.url
 
-        # Si el servidor devuelve 4xx/5xx definitivo, es error técnico
         if response and response.status >= 400:
             return {
                 "status": "INCIERTA",
@@ -135,18 +115,15 @@ async def _check_single_review(page: Page, url: str) -> dict:
                 "final_url": final_url,
             }
 
-        # ── Fase 2: Descartar pantalla GDPR ──────────────────────────────────
         await _dismiss_consent(page)
 
-        # ── Fase 3: Esperar señal útil (máx 12 s) ────────────────────────────
         wait_triggered = False
         try:
             await page.wait_for_function(_WAIT_CONDITION_JS, timeout=12_000)
             wait_triggered = True
         except PlaywrightTimeout:
-            pass  # Analizamos lo que haya cargado hasta ahora
+            pass
 
-        # ── Fase 4: Recoger evidencias ────────────────────────────────────────
         page_text = ""
         try:
             page_text = await page.inner_text("body")
@@ -161,7 +138,6 @@ async def _check_single_review(page: Page, url: str) -> dict:
 
         active_evidence: list[str] = []
 
-        # Estrellas por selector CSS
         for sel in ACTIVE_STAR_SELECTORS:
             try:
                 el = await page.query_selector(sel)
@@ -172,15 +148,11 @@ async def _check_single_review(page: Page, url: str) -> dict:
             except Exception:
                 continue
 
-        # Estrellas por patrón de texto visible
         if not active_evidence:
             m = STAR_TEXT_RE.search(text_lower)
             if m:
                 active_evidence.append(f"Puntuación en texto visible: '{m.group()}'")
 
-        # ── Fase 5: Clasificación conservadora ───────────────────────────────
-
-        # Eliminada tiene prioridad absoluta sobre cualquier otra señal
         if deletion_evidence:
             return {
                 "status": "ELIMINADA",
@@ -189,7 +161,6 @@ async def _check_single_review(page: Page, url: str) -> dict:
                 "final_url": final_url,
             }
 
-        # Activa solo si hay evidencia positiva fuerte
         if active_evidence:
             return {
                 "status": "ACTIVA",
@@ -198,7 +169,6 @@ async def _check_single_review(page: Page, url: str) -> dict:
                 "final_url": final_url,
             }
 
-        # Sin evidencia clara → INCIERTA
         reason = (
             "Cargó Maps pero sin señales de reseña activa ni eliminada"
             if wait_triggered
@@ -232,10 +202,6 @@ async def check_reviews_stream(
     max_concurrent: int = 3,
     delay_seconds: float = 1.5,
 ) -> AsyncGenerator[dict, None]:
-    """
-    Async generator: verifica URLs con concurrencia limitada y
-    devuelve resultados uno a uno conforme terminan.
-    """
     semaphore = asyncio.Semaphore(max_concurrent)
     result_queue: asyncio.Queue = asyncio.Queue()
     total = len(url_items)
@@ -255,7 +221,6 @@ async def check_reviews_stream(
             viewport={"width": 1280, "height": 900},
             locale="es-ES",
         )
-        # Bloquear recursos pesados que no aportan información
         await context.route(
             "**/*.{png,jpg,jpeg,gif,webp,svg,ico,woff,woff2,ttf,otf,mp4,mp3,avi}",
             lambda route: route.abort(),
@@ -300,7 +265,6 @@ async def check_reviews_stream(
         await browser.close()
 
 
-# Compatibilidad con CLI (main.py)
 async def check_reviews(url_items, max_concurrent=3, delay_seconds=1.5, progress_callback=None):
     results = {}
     total = len(url_items)
