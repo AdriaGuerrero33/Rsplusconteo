@@ -150,52 +150,63 @@ async def _fetch_bypassing_consent(
     client: httpx.AsyncClient, url: str
 ) -> tuple[str, str]:
     """
-    Sigue redirects manualmente. Si aparece consent.google.com, extrae el
-    parámetro 'continue' y salta directamente a la URL real con cookies forzadas.
-    httpx elimina las cookies en redirects cross-domain (RFC 7231), así que
-    tenemos que inyectarlas en cada petición manualmente.
+    Sigue todos los redirects. Si acaba en consent.google.com, acepta el
+    formulario mediante POST para obtener una cookie SOCS real de Google.
+    httpx lleva esa cookie automáticamente en los redirects posteriores.
     """
-    from urllib.parse import urlparse, parse_qs, unquote, urljoin
+    from urllib.parse import urljoin
 
-    cookie_header = (
-        "SOCS=CAESHAgBEhIaAB; "
-        "CONSENT=PENDING+987"
-    )
+    # Paso 1: seguir todos los redirects (puede aterrizar en consent.google.com)
+    r = await client.get(url, headers=HEADERS, follow_redirects=True, timeout=15)
 
-    current = url
-    for _ in range(12):
-        r = await client.get(
-            current,
-            follow_redirects=False,
-            headers={**HEADERS, "Cookie": cookie_header},
+    # Paso 2: si acabamos en consent, aceptar el formulario vía POST
+    if "consent.google.com" in str(r.url):
+        print(f"[consent] Detectada página de consentimiento: {str(r.url)[:80]}", flush=True)
+        html_consent = r.text
+
+        action_m = re.search(
+            r'<form[^>]+action=["\']([^"\']+)["\']', html_consent, re.IGNORECASE
         )
-        if r.status_code not in (301, 302, 303, 307, 308):
-            return r.text, str(r.url)
+        if action_m:
+            action = urljoin(str(r.url), action_m.group(1))
 
-        location = r.headers.get("location", "")
-        if not location:
-            return r.text, str(r.url)
+            # Extraer todos los campos ocultos del formulario
+            form_data = {}
+            for m in re.finditer(
+                r'<input[^>]+name=["\']([^"\']+)["\'][^>]*value=["\']([^"\']*)["\']',
+                html_consent, re.IGNORECASE,
+            ):
+                form_data[m.group(1)] = m.group(2)
+            for m in re.finditer(
+                r'<input[^>]+value=["\']([^"\']*)["\'][^>]*name=["\']([^"\']+)["\']',
+                html_consent, re.IGNORECASE,
+            ):
+                if m.group(2) not in form_data:
+                    form_data[m.group(2)] = m.group(1)
 
-        # Resolver URL relativa
-        if location.startswith("/"):
-            location = urljoin(current, location)
+            # set_eom=false → "Aceptar todo" (no solo esenciales)
+            form_data["set_eom"] = "false"
 
-        # Saltar consent.google.com extrayendo el destino real
-        if "consent.google.com" in location:
-            qs = parse_qs(urlparse(location).query)
-            cont = qs.get("continue", [None])[0]
-            if cont:
-                location = unquote(cont)
-                print(f"[consent] saltando → {location[:80]}", flush=True)
+            print(
+                f"[consent] POST {action} | campos: {list(form_data.keys())}",
+                flush=True,
+            )
 
-        current = location
+            # POST — httpx guarda la cookie SOCS en su jar y la usa en los redirects
+            r = await client.post(
+                action,
+                data=form_data,
+                headers={**HEADERS, "Referer": str(r.url)},
+                follow_redirects=True,
+                timeout=15,
+            )
+            print(
+                f"[consent] POST resultado: {r.status_code} | {str(r.url)[:80]}",
+                flush=True,
+            )
+        else:
+            print("[consent] No se encontró el formulario en la página de consentimiento", flush=True)
 
-    # Último intento
-    r = await client.get(
-        current,
-        follow_redirects=False,
-        headers={**HEADERS, "Cookie": cookie_header},
-    )
     return r.text, str(r.url)
 
 
@@ -279,10 +290,10 @@ async def check_reviews_stream(
     result_queue: asyncio.Queue = asyncio.Queue()
     total = len(url_items)
 
-    # Un único cliente httpx compartido para todas las peticiones
+    # Un único cliente httpx compartido — el cookie jar acumula la SOCS de Google
     async with httpx.AsyncClient(
-        follow_redirects=False,
-        timeout=15,
+        follow_redirects=True,
+        timeout=20,
     ) as client:
 
         async def check_one(idx: int, item: dict):
