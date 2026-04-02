@@ -6,11 +6,7 @@
   <title>RS Plus — Verificador de Reseñas</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #f0f2f5; min-height: 100vh;
-      display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px;
-    }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; min-height: 100vh; display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; }
     .container { width: 100%; max-width: 760px; }
     .card { background: white; border-radius: 16px; padding: 32px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 20px; }
     h1 { font-size: 22px; font-weight: 700; color: #1a1a2e; margin-bottom: 4px; }
@@ -51,10 +47,11 @@
     .progress-bar-fill { height: 100%; background: linear-gradient(90deg, #4f46e5, #7c3aed); border-radius: 999px; transition: width 0.5s ease; width: 0%; position: relative; overflow: hidden; }
     .progress-bar-fill.pulsing::after { content: ""; position: absolute; top: 0; left: -100%; right: 0; bottom: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent); animation: shimmer 1.4s infinite; }
     @keyframes shimmer { 0% { left: -100%; } 100% { left: 200%; } }
+    .progress-info { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; }
     .spinner { display: none; width: 14px; height: 14px; border: 2px solid #e5e7eb; border-top-color: #4f46e5; border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0; }
     .spinner.visible { display: inline-block; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .progress-label { font-size: 13px; color: #6b7280; margin-bottom: 20px; }
+    .progress-label { font-size: 13px; color: #6b7280; }
     .log-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px; }
     .log-box { background: #0f172a; border-radius: 10px; padding: 16px; height: 220px; overflow-y: auto; font-family: "Menlo", "Consolas", monospace; font-size: 12px; line-height: 1.6; }
     .log-line { display: flex; gap: 8px; }
@@ -71,7 +68,7 @@
     .result-card.error-card .result-text { color: #991b1b; }
     .btn-sheet { padding: 10px 18px; background: #059669; color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; text-decoration: none; white-space: nowrap; transition: background 0.2s; }
     .btn-sheet:hover { background: #047857; }
-    .results-table-wrap { display: none; margin-top: 20px; }
+    .results-table-wrap { display: none; }
     .results-table-wrap.visible { display: block; }
     .results-table-wrap h3 { font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 10px; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -82,10 +79,7 @@
     .badge.ACTIVA    { background: #d1fae5; color: #065f46; }
     .badge.ELIMINADA { background: #fee2e2; color: #991b1b; }
     .badge.ERROR     { background: #fef3c7; color: #92400e; }
-    @media (max-width: 500px) {
-      .counters { grid-template-columns: repeat(2, 1fr); }
-      .input-row { flex-direction: column; }
-    }
+    @media (max-width: 500px) { .counters { grid-template-columns: repeat(2, 1fr); } .input-row { flex-direction: column; } }
   </style>
 </head>
 <body>
@@ -118,7 +112,7 @@
     </div>
     <div class="progress-section" id="progress-section">
       <div class="progress-bar-track"><div class="progress-bar-fill" id="progress-bar"></div></div>
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:20px;">
+      <div class="progress-info">
         <div class="spinner" id="spinner"></div>
         <span class="progress-label" id="progress-label">Iniciando...</span>
       </div>
@@ -204,9 +198,8 @@
   function updateProgress(current,total) {
     const pct=total>0?Math.round((current/total)*100):0;
     const bar=document.getElementById("progress-bar");
-    bar.style.width=pct+"%";
-    bar.classList.add("pulsing");
-    document.getElementById("progress-label").textContent=`Verificando... ${current} de ${total} (${pct}%)`;
+    bar.style.width=pct+"%"; bar.classList.add("pulsing");
+    document.getElementById("progress-label").textContent=`Verificando ${current} de ${total} (${pct}%)`;
     if(current>=total){bar.classList.remove("pulsing");document.getElementById("spinner").classList.remove("visible");}
   }
   function addLog(type,icon,text) {
@@ -237,6 +230,8 @@
     const card=document.getElementById("result-card"); card.classList.add("visible","error-card");
     document.getElementById("result-text").textContent="Error: "+message;
     document.getElementById("result-link").style.display="none";
+    document.getElementById("spinner").classList.remove("visible");
+    document.getElementById("progress-bar").classList.remove("pulsing");
   }
   function resetUI() {
     document.getElementById("cnt-total").textContent="—";
@@ -244,8 +239,7 @@
     document.getElementById("cnt-eliminadas").textContent="—";
     document.getElementById("cnt-errores").textContent="—";
     document.getElementById("log-box").innerHTML="";
-    const bar=document.getElementById("progress-bar");
-    bar.style.width="0%"; bar.classList.remove("pulsing");
+    const bar=document.getElementById("progress-bar"); bar.style.width="0%"; bar.classList.remove("pulsing");
     document.getElementById("spinner").classList.remove("visible");
     document.getElementById("progress-label").textContent="Iniciando...";
     document.getElementById("result-card").classList.remove("visible","error-card");
