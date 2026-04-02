@@ -48,7 +48,12 @@
     .progress-section { display: none; }
     .progress-section.visible { display: block; }
     .progress-bar-track { background: #e5e7eb; border-radius: 999px; height: 8px; overflow: hidden; margin-bottom: 8px; }
-    .progress-bar-fill { height: 100%; background: linear-gradient(90deg, #4f46e5, #7c3aed); border-radius: 999px; transition: width 0.3s ease; width: 0%; }
+    .progress-bar-fill { height: 100%; background: linear-gradient(90deg, #4f46e5, #7c3aed); border-radius: 999px; transition: width 0.5s ease; width: 0%; position: relative; overflow: hidden; }
+    .progress-bar-fill.pulsing::after { content: ""; position: absolute; top: 0; left: -100%; right: 0; bottom: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent); animation: shimmer 1.4s infinite; }
+    @keyframes shimmer { 0% { left: -100%; } 100% { left: 200%; } }
+    .spinner { display: none; width: 14px; height: 14px; border: 2px solid #e5e7eb; border-top-color: #4f46e5; border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0; }
+    .spinner.visible { display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .progress-label { font-size: 13px; color: #6b7280; margin-bottom: 20px; }
     .log-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px; }
     .log-box { background: #0f172a; border-radius: 10px; padding: 16px; height: 220px; overflow-y: auto; font-family: "Menlo", "Consolas", monospace; font-size: 12px; line-height: 1.6; }
@@ -113,7 +118,10 @@
     </div>
     <div class="progress-section" id="progress-section">
       <div class="progress-bar-track"><div class="progress-bar-fill" id="progress-bar"></div></div>
-      <div class="progress-label" id="progress-label">Iniciando...</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:20px;">
+        <div class="spinner" id="spinner"></div>
+        <span class="progress-label" id="progress-label">Iniciando...</span>
+      </div>
       <div class="log-title">Registro en tiempo real</div>
       <div class="log-box" id="log-box"></div>
     </div>
@@ -140,6 +148,8 @@
     if (!url) { alert("Pega la URL de tu hoja de Google Sheets."); return; }
     resetUI(); setButtonsDisabled(true);
     document.getElementById("progress-section").classList.add("visible");
+    document.getElementById("spinner").classList.add("visible");
+    document.getElementById("progress-bar").classList.add("pulsing");
     if (eventSource) eventSource.close();
     eventSource = new EventSource(`/check?sheet_url=${encodeURIComponent(url)}`);
     eventSource.onmessage = (e) => handleEvent(JSON.parse(e.data),"sheet");
@@ -152,6 +162,8 @@
     if (urls.length===0) { alert("No se encontraron URLs."); return; }
     resetUI(); setButtonsDisabled(true);
     document.getElementById("progress-section").classList.add("visible");
+    document.getElementById("spinner").classList.add("visible");
+    document.getElementById("progress-bar").classList.add("pulsing");
     try {
       const response = await fetch("/check-direct",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({urls})});
       const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer="";
@@ -191,8 +203,11 @@
   }
   function updateProgress(current,total) {
     const pct=total>0?Math.round((current/total)*100):0;
-    document.getElementById("progress-bar").style.width=pct+"%";
+    const bar=document.getElementById("progress-bar");
+    bar.style.width=pct+"%";
+    bar.classList.add("pulsing");
     document.getElementById("progress-label").textContent=`Verificando... ${current} de ${total} (${pct}%)`;
+    if(current>=total){bar.classList.remove("pulsing");document.getElementById("spinner").classList.remove("visible");}
   }
   function addLog(type,icon,text) {
     const box=document.getElementById("log-box"); const line=document.createElement("div");
@@ -229,7 +244,9 @@
     document.getElementById("cnt-eliminadas").textContent="—";
     document.getElementById("cnt-errores").textContent="—";
     document.getElementById("log-box").innerHTML="";
-    document.getElementById("progress-bar").style.width="0%";
+    const bar=document.getElementById("progress-bar");
+    bar.style.width="0%"; bar.classList.remove("pulsing");
+    document.getElementById("spinner").classList.remove("visible");
     document.getElementById("progress-label").textContent="Iniciando...";
     document.getElementById("result-card").classList.remove("visible","error-card");
     document.getElementById("result-link").style.display="";
