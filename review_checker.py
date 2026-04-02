@@ -26,7 +26,7 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Encoding": "gzip, deflate, br",
     "Connection": "keep-alive",
@@ -34,15 +34,9 @@ HEADERS = {
     "Sec-Fetch-Dest": "document",
     "Sec-Fetch-Mode": "navigate",
     "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
 }
 
-# Cookies para saltar la página de consentimiento GDPR de Google
-# (Railway está en la UE, consent.google.com intercepta todas las peticiones sin cookie)
-CONSENT_COOKIES = {
-    "SOCS": "CAISHAgBEhJnd3NfMjAyMzA4MjktMF9SQzEaAmRlIAEaBgiA_LynBg",
-    "CONSENT": "YES+cb.20210328-17-p0.en+FX+111",
-    "NID": "511=placeholder",
-}
 
 # Frases que aparecen cuando una reseña fue eliminada
 DELETED_PHRASES: list[tuple[str, str]] = [
@@ -164,8 +158,8 @@ async def _fetch_bypassing_consent(
     from urllib.parse import urlparse, parse_qs, unquote, urljoin
 
     cookie_header = (
-        "SOCS=CAISHAgBEhJnd3NfMjAyMzA4MjktMF9SQzEaAmRlIAEaBgiA_LynBg; "
-        "CONSENT=YES+cb.20210328-17-p0.en+FX+111"
+        "SOCS=CAESHAgBEhIaAB; "
+        "CONSENT=PENDING+987"
     )
 
     current = url
