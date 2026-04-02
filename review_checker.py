@@ -102,31 +102,41 @@ def _extract_review_text(html: str) -> str:
         m = re.search(pattern, html, re.IGNORECASE)
         if m:
             desc = m.group(1).strip()
-            # Excluir descripciones genéricas de Maps
-            if not any(p in desc.lower() for p in [
-                "google maps", "cómo llegar", "how to get", "street view", "reviews for", "opiniones de"
+            # Excluir descripciones genéricas de Maps o del lugar (no de reseña)
+            if any(p in desc.lower() for p in [
+                "google maps", "cómo llegar", "how to get", "street view",
+                "reviews for", "opiniones de", "find local businesses",
+                "maps.google", "ver el mapa", "google maps"
             ]):
-                return desc[:350]
+                continue
+            # Debe tener ratio de letras alto (texto real, no coordenadas/JS)
+            letters = sum(1 for c in desc if c.isalpha())
+            if letters / max(len(desc), 1) < 0.60:
+                continue
+            return desc[:350]
 
     # 3. Datos embebidos en JS de Google Maps
     # Google codifica los datos de la página en estructuras JSON dentro de scripts.
-    # Buscamos strings que parezcan texto de reseña: ≥6 palabras, ≤300 chars,
-    # sin URLs ni marcado.
+    # Buscamos strings que parezcan texto de reseña: ≥8 palabras, ≤400 chars,
+    # alto ratio de letras (texto humano, no código/SVG/coordenadas).
     seen = set()
-    for raw in re.findall(r'"([^"\\]{40,300})"', html):
-        # Decodificar escapes básicos
+    for raw in re.findall(r'"([^"\\]{50,400})"', html):
         text = raw.replace("\\n", " ").replace("\\t", " ").strip()
         if text in seen:
             continue
         seen.add(text)
-        # Filtrar URLs, HTML, código
-        if text.startswith(("http", "/", "{")):
+        # Filtrar URLs, HTML, código, rutas de archivo
+        if text.startswith(("http", "/", "{", "M", "m")):
             continue
-        if any(c in text for c in ("<", ">", "\\", "=", ";", "{", "}")):
+        if any(c in text for c in ("<", ">", "\\", "=", ";", "{", "}", "%", "@")):
+            continue
+        # Ratio de letras > 65%: descarta SVG paths, coordenadas, hashes, base64
+        letters = sum(1 for c in text if c.isalpha())
+        if letters / max(len(text), 1) < 0.65:
             continue
         words = text.split()
-        # Debe tener ≥6 palabras y ninguna excesivamente larga (no código)
-        if len(words) >= 6 and all(len(w) <= 25 for w in words):
+        # ≥8 palabras reales, ninguna excesivamente larga (no código)
+        if len(words) >= 8 and all(len(w) <= 20 for w in words):
             return text[:350]
 
     return ""
