@@ -36,6 +36,14 @@ HEADERS = {
     "Sec-Fetch-Site": "none",
 }
 
+# Cookies para saltar la página de consentimiento GDPR de Google
+# (Railway está en la UE, consent.google.com intercepta todas las peticiones sin cookie)
+CONSENT_COOKIES = {
+    "SOCS": "CAISHAgBEhJnd3NfMjAyMzA4MjktMF9SQzEaAmRlIAEaBgiA_LynBg",
+    "CONSENT": "YES+cb.20210328-17-p0.en+FX+111",
+    "NID": "511=placeholder",
+}
+
 # Frases que aparecen cuando una reseña fue eliminada
 DELETED_PHRASES: list[tuple[str, str]] = [
     ("no longer available",        "EN: 'no longer available'"),
@@ -154,8 +162,20 @@ async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
         r = await client.get(url)
         final_url = str(r.url)
         html = r.text
-        html_lower = html.lower()
 
+        # Si acabamos en la página de consentimiento GDPR, seguimos el enlace "continue"
+        if "consent.google.com" in final_url:
+            from urllib.parse import urlparse, parse_qs, unquote
+            qs = parse_qs(urlparse(final_url).query)
+            continue_url = qs.get("continue", [None])[0]
+            if continue_url:
+                continue_url = unquote(continue_url)
+                print(f"[check] GDPR consent interceptado → siguiendo {continue_url[:80]}", flush=True)
+                r2 = await client.get(continue_url)
+                final_url = str(r2.url)
+                html = r2.text
+
+        html_lower = html.lower()
         print(f"[check] {url[:60]} → HTTP {r.status_code} | {len(html)} chars | final={final_url[:80]}", flush=True)
 
         # ── A. Señal de ELIMINACIÓN ───────────────────────────────────────────
@@ -228,6 +248,7 @@ async def check_reviews_stream(
     # Un único cliente httpx compartido para todas las peticiones
     async with httpx.AsyncClient(
         headers=HEADERS,
+        cookies=CONSENT_COOKIES,
         follow_redirects=True,
         timeout=15,
         max_redirects=10,
