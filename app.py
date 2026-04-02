@@ -180,6 +180,104 @@ async def check(sheet_url: str, request: Request):
     )
 
 
+async def run_direct(urls: list[str]) -> AsyncGenerator[str, None]:
+    """Verifica una lista de URLs directas sin necesitar Google Sheets."""
+
+    async def emit(event_type: str, **kwargs):
+        yield sse_event({"type": event_type, **kwargs})
+
+    total = len(urls)
+    if total == 0:
+        async for chunk in emit("error", message="No hay URLs para verificar."):
+            yield chunk
+        return
+
+    url_items = [{"url": u.strip(), "row_data": [u.strip()]} for u in urls if u.strip()]
+    total = len(url_items)
+
+    async for chunk in emit("total", total=total):
+        yield chunk
+    async for chunk in emit("status", message=f"Verificando {total} URLs con Playwright..."):
+        yield chunk
+
+    counters = {"activas": 0, "eliminadas": 0, "errores": 0}
+    progress_queue: asyncio.Queue = asyncio.Queue()
+
+    def on_progress(current: int, total_: int, item: dict):
+        status = item.get("status", "ERROR")
+        if status == "ACTIVA":
+            counters["activas"] += 1
+        elif status == "ELIMINADA":
+            counters["eliminadas"] += 1
+        else:
+            counters["errores"] += 1
+        progress_queue.put_nowait({
+            "type": "progress",
+            "current": current,
+            "total": total_,
+            "status": status,
+            "url": item.get("url", "")[:80],
+            "detail": item.get("detail", ""),
+            "activas": counters["activas"],
+            "eliminadas": counters["eliminadas"],
+            "errores": counters["errores"],
+        })
+
+    agent_task = asyncio.create_task(
+        check_reviews(url_items, MAX_CONCURRENT, DELAY, progress_callback=on_progress)
+    )
+
+    processed = 0
+    while processed < total:
+        try:
+            event = await asyncio.wait_for(progress_queue.get(), timeout=60.0)
+            yield sse_event(event)
+            processed += 1
+        except asyncio.TimeoutError:
+            break
+
+    results = await agent_task
+
+    # Construir tabla de resultados para mostrar en la UI
+    rows_output = []
+    for r in results:
+        if r:
+            rows_output.append({
+                "url": r.get("url", ""),
+                "status": r.get("status", "ERROR"),
+                "detail": r.get("detail", ""),
+            })
+
+    async for chunk in emit("done",
+        total=total,
+        activas=counters["activas"],
+        eliminadas=counters["eliminadas"],
+        errores=counters["errores"],
+        sheet_url=None,
+        results_tab=None,
+        rows=rows_output,
+    ):
+        yield chunk
+
+
+from pydantic import BaseModel
+
+class DirectCheckRequest(BaseModel):
+    urls: list[str]
+
+
+@app.post("/check-direct")
+async def check_direct(body: DirectCheckRequest, request: Request):
+    return StreamingResponse(
+        run_direct(body.urls),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
