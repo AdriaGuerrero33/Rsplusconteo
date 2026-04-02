@@ -19,83 +19,69 @@
     .input-row { display: flex; gap: 10px; }
     input[type="text"] { flex: 1; padding: 12px 16px; border: 2px solid #e5e7eb; border-radius: 10px; font-size: 14px; outline: none; transition: border-color 0.2s; }
     input[type="text"]:focus { border-color: #4f46e5; }
-    textarea#direct-urls { width: 100%; height: 160px; padding: 12px 16px; border: 2px solid #e5e7eb; border-radius: 10px; font-size: 13px; font-family: "Menlo", "Consolas", monospace; resize: vertical; outline: none; transition: border-color 0.2s; margin-bottom: 10px; line-height: 1.6; }
+    textarea#direct-urls { width: 100%; height: 160px; padding: 12px 16px; border: 2px solid #e5e7eb; border-radius: 10px; font-size: 13px; font-family: "Menlo","Consolas",monospace; resize: vertical; outline: none; transition: border-color 0.2s; margin-bottom: 10px; line-height: 1.6; }
     textarea#direct-urls:focus { border-color: #4f46e5; }
     .url-hint { font-size: 12px; color: #9ca3af; margin-bottom: 10px; }
     .btn-check { padding: 12px 24px; background: #4f46e5; color: white; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.2s, opacity 0.2s; white-space: nowrap; }
     .btn-check:hover { background: #4338ca; }
     .btn-check:disabled { opacity: 0.5; cursor: not-allowed; }
-
-    /* ── Contadores ── */
-    .counters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+    .counters { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin-bottom: 24px; }
     .counter-box { border-radius: 12px; padding: 16px; text-align: center; }
-    .counter-box.total    { background: #f3f4f6; }
-    .counter-box.active   { background: #ecfdf5; }
-    .counter-box.deleted  { background: #fef2f2; }
-    .counter-box.uncertain{ background: #fff7ed; }
+    .counter-box.total     { background: #f3f4f6; }
+    .counter-box.active    { background: #ecfdf5; }
+    .counter-box.deleted   { background: #fef2f2; }
+    .counter-box.uncertain { background: #fff7ed; }
     .counter-num { font-size: 32px; font-weight: 800; line-height: 1; margin-bottom: 4px; }
-    .counter-box.total    .counter-num { color: #374151; }
-    .counter-box.active   .counter-num { color: #059669; }
-    .counter-box.deleted  .counter-num { color: #dc2626; }
-    .counter-box.uncertain.counter-num { color: #d97706; }
+    .counter-box.total     .counter-num { color: #374151; }
+    .counter-box.active    .counter-num { color: #059669; }
+    .counter-box.deleted   .counter-num { color: #dc2626; }
+    .counter-box.uncertain .counter-num { color: #d97706; }
     .counter-label { font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
-    .counter-box.total    .counter-label { color: #6b7280; }
-    .counter-box.active   .counter-label { color: #065f46; }
-    .counter-box.deleted  .counter-label { color: #991b1b; }
+    .counter-box.total     .counter-label { color: #6b7280; }
+    .counter-box.active    .counter-label { color: #065f46; }
+    .counter-box.deleted   .counter-label { color: #991b1b; }
     .counter-box.uncertain .counter-label { color: #92400e; }
-
-    /* ── Barra de progreso ── */
     .progress-section { display: none; }
     .progress-section.visible { display: block; }
     .progress-bar-track { background: #e5e7eb; border-radius: 999px; height: 8px; overflow: hidden; margin-bottom: 8px; }
-    .progress-bar-fill { height: 100%; background: linear-gradient(90deg, #4f46e5, #7c3aed); border-radius: 999px; transition: width 0.5s ease; width: 0%; position: relative; overflow: hidden; }
-    .progress-bar-fill.pulsing::after { content: ""; position: absolute; top: 0; left: -100%; right: 0; bottom: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent); animation: shimmer 1.4s infinite; }
-    @keyframes shimmer { 0% { left: -100%; } 100% { left: 200%; } }
-    .progress-info { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; }
-    .spinner { display: none; width: 14px; height: 14px; border: 2px solid #e5e7eb; border-top-color: #4f46e5; border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0; }
-    .spinner.visible { display: inline-block; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .progress-label { font-size: 13px; color: #6b7280; }
-
-    /* ── Log ── */
-    .log-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px; }
-    .log-box { background: #0f172a; border-radius: 10px; padding: 16px; height: 240px; overflow-y: auto; font-family: "Menlo", "Consolas", monospace; font-size: 12px; line-height: 1.6; }
-    .log-line { display: flex; gap: 8px; margin-bottom: 2px; }
-    .log-icon { flex-shrink: 0; width: 14px; }
-    .log-text { color: #94a3b8; word-break: break-all; }
-    .log-detail { color: #475569; font-size: 11px; margin-left: 22px; margin-bottom: 4px; }
-    .log-line.activa    .log-text { color: #34d399; }
-    .log-line.eliminada .log-text { color: #f87171; }
-    .log-line.incierta  .log-text { color: #fb923c; }
-    .log-line.info      .log-text { color: #60a5fa; }
-
-    /* ── Tarjeta de resultado final ── */
-    .result-card { display: none; background: #f0fdf4; border: 2px solid #bbf7d0; border-radius: 12px; padding: 20px 24px; }
-    .result-card.visible { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-    .result-card.error-card { background: #fef2f2; border-color: #fecaca; }
-    .result-text { font-size: 14px; color: #166534; font-weight: 500; }
-    .result-card.error-card .result-text { color: #991b1b; }
-    .btn-sheet { padding: 10px 18px; background: #059669; color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; text-decoration: none; white-space: nowrap; transition: background 0.2s; }
-    .btn-sheet:hover { background: #047857; }
-
-    /* ── Tabla de resultados ── */
-    .results-table-wrap { display: none; }
-    .results-table-wrap.visible { display: block; }
-    .results-table-wrap h3 { font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 10px; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th { background: #f3f4f6; padding: 8px 12px; text-align: left; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; }
-    td { padding: 8px 12px; border-bottom: 1px solid #f3f4f6; color: #4b5563; word-break: break-all; }
-    tr:hover td { background: #f9fafb; }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
-    .badge.ACTIVA    { background: #d1fae5; color: #065f46; }
-    .badge.ELIMINADA { background: #fee2e2; color: #991b1b; }
-    .badge.INCIERTA  { background: #ffedd5; color: #9a3412; }
-    .evidence-list { font-size: 11px; color: #9ca3af; margin-top: 2px; }
-
-    @media (max-width: 560px) {
-      .counters { grid-template-columns: repeat(2, 1fr); }
-      .input-row { flex-direction: column; }
-    }
+    .progress-bar-fill { height: 100%; background: linear-gradient(90deg,#4f46e5,#7c3aed); border-radius: 999px; transition: width 0.4s ease; width: 0%; position: relative; overflow: hidden; }
+    .progress-bar-fill.pulsing::after { content:""; position:absolute; top:0; left:-100%; right:0; bottom:0; background:linear-gradient(90deg,transparent,rgba(255,255,255,.35),transparent); animation:shimmer 1.4s infinite; }
+    @keyframes shimmer { 0%{left:-100%} 100%{left:200%} }
+    .progress-info { display:flex; align-items:center; gap:8px; margin-bottom:20px; }
+    .spinner { display:none; width:14px; height:14px; border:2px solid #e5e7eb; border-top-color:#4f46e5; border-radius:50%; animation:spin .7s linear infinite; flex-shrink:0; }
+    .spinner.visible { display:inline-block; }
+    @keyframes spin { to{transform:rotate(360deg)} }
+    .progress-label { font-size:13px; color:#6b7280; }
+    .log-title { font-size:13px; font-weight:600; color:#374151; margin-bottom:8px; }
+    .log-box { background:#0f172a; border-radius:10px; padding:16px; height:240px; overflow-y:auto; font-family:"Menlo","Consolas",monospace; font-size:12px; line-height:1.6; }
+    .log-line { display:flex; gap:8px; margin-bottom:1px; }
+    .log-icon { flex-shrink:0; width:14px; }
+    .log-text { color:#94a3b8; word-break:break-all; }
+    .log-detail { color:#475569; font-size:11px; margin-left:22px; margin-bottom:3px; }
+    .log-line.activa    .log-text { color:#34d399; }
+    .log-line.eliminada .log-text { color:#f87171; }
+    .log-line.incierta  .log-text { color:#fb923c; }
+    .log-line.info      .log-text { color:#60a5fa; }
+    .result-card { display:none; background:#f0fdf4; border:2px solid #bbf7d0; border-radius:12px; padding:20px 24px; }
+    .result-card.visible { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+    .result-card.error-card { background:#fef2f2; border-color:#fecaca; }
+    .result-text { font-size:14px; color:#166534; font-weight:500; }
+    .result-card.error-card .result-text { color:#991b1b; }
+    .btn-sheet { padding:10px 18px; background:#059669; color:white; border:none; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; text-decoration:none; white-space:nowrap; transition:background .2s; }
+    .btn-sheet:hover { background:#047857; }
+    .results-table-wrap { display:none; }
+    .results-table-wrap.visible { display:block; }
+    .results-table-wrap h3 { font-size:14px; font-weight:600; color:#374151; margin-bottom:10px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th { background:#f3f4f6; padding:8px 12px; text-align:left; font-weight:600; color:#374151; border-bottom:2px solid #e5e7eb; }
+    td { padding:8px 12px; border-bottom:1px solid #f3f4f6; color:#4b5563; word-break:break-all; }
+    tr:hover td { background:#f9fafb; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700; text-transform:uppercase; }
+    .badge.ACTIVA    { background:#d1fae5; color:#065f46; }
+    .badge.ELIMINADA { background:#fee2e2; color:#991b1b; }
+    .badge.INCIERTA  { background:#ffedd5; color:#9a3412; }
+    .evidence-list { font-size:11px; color:#9ca3af; margin-top:2px; }
+    @media(max-width:560px){ .counters{grid-template-columns:repeat(2,1fr)} .input-row{flex-direction:column} }
   </style>
 </head>
 <body>
@@ -105,7 +91,7 @@
     <p class="subtitle">Comprueba qué reseñas siguen activas y cuáles han sido eliminadas.</p>
     <div class="tabs">
       <button class="tab-btn active" onclick="switchTab('sheet')">Google Sheets</button>
-      <button class="tab-btn" onclick="switchTab('direct')">URLs directas</button>
+      <button class="tab-btn"        onclick="switchTab('direct')">URLs directas</button>
     </div>
     <div class="tab-panel active" id="panel-sheet">
       <div class="input-row">
@@ -139,11 +125,8 @@
         <div class="counter-label">Inciertas</div>
       </div>
     </div>
-
     <div class="progress-section" id="progress-section">
-      <div class="progress-bar-track">
-        <div class="progress-bar-fill" id="progress-bar"></div>
-      </div>
+      <div class="progress-bar-track"><div class="progress-bar-fill" id="progress-bar"></div></div>
       <div class="progress-info">
         <div class="spinner" id="spinner"></div>
         <span class="progress-label" id="progress-label">Iniciando...</span>
@@ -161,17 +144,21 @@
   <div class="card results-table-wrap" id="results-table-wrap">
     <h3>Resultados detallados</h3>
     <table>
-      <thead>
-        <tr><th>#</th><th>URL</th><th>Estado</th><th>Motivo / Evidencia</th></tr>
-      </thead>
+      <thead><tr><th>#</th><th>URL</th><th>Estado</th><th>Motivo / Evidencia</th></tr></thead>
       <tbody id="results-tbody"></tbody>
     </table>
   </div>
 </div>
 
 <script>
-  let eventSource = null;
+  // ── Estado del polling ──────────────────────────────────────────────────────
+  let _pollTimer   = null;
+  let _allResults  = [];   // acumula todos los resultados para la tabla final
+  let _lastLogLen  = 0;
 
+  function _stopPoll() { if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; } }
+
+  // ── Iniciar trabajos ────────────────────────────────────────────────────────
   function switchTab(tab) {
     document.querySelectorAll(".tab-btn").forEach((b,i) =>
       b.classList.toggle("active",(i===0&&tab==="sheet")||(i===1&&tab==="direct")));
@@ -179,124 +166,141 @@
     document.getElementById("panel-direct").classList.toggle("active",tab==="direct");
   }
 
-  function startCheckSheet() {
+  async function startCheckSheet() {
     const url = document.getElementById("sheet-url").value.trim();
     if (!url) { alert("Pega la URL de tu hoja de Google Sheets."); return; }
-    resetUI(); setButtonsDisabled(true);
-    showProgressSection();
-    if (eventSource) eventSource.close();
-    eventSource = new EventSource(`/check?sheet_url=${encodeURIComponent(url)}`);
-    eventSource.onmessage = (e) => handleEvent(JSON.parse(e.data), "sheet");
-    eventSource.onerror = () => {
-      addLog("incierta","⚠","Conexión interrumpida.");
+    resetUI(); setButtonsDisabled(true); showProgressSection();
+    try {
+      const res  = await fetch("/start-job-sheets", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({sheet_url: url})
+      });
+      const {job_id} = await res.json();
+      addLog("info","ℹ","Trabajo iniciado, esperando resultados...");
+      poll(job_id, 0, "sheet");
+    } catch(err) {
+      addLog("incierta","⚠","Error al iniciar: "+err.message);
       setButtonsDisabled(false);
-      eventSource.close();
-    };
+    }
   }
 
   async function startCheckDirect() {
     const raw = document.getElementById("direct-urls").value.trim();
     if (!raw) { alert("Pega al menos una URL."); return; }
     const urls = raw.split("\n").map(u=>u.trim()).filter(u=>u.length>0);
-    if (urls.length===0) { alert("No se encontraron URLs."); return; }
-    resetUI(); setButtonsDisabled(true);
-    showProgressSection();
+    if (!urls.length) { alert("No se encontraron URLs válidas."); return; }
+    resetUI(); setButtonsDisabled(true); showProgressSection();
     try {
-      const response = await fetch("/check-direct", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
+      const res = await fetch("/start-job-direct", {
+        method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({urls})
       });
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (true) {
-        const {done,value} = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, {stream:true});
-        const lines = buffer.split("\n");
-        buffer = lines.pop();
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try { handleEvent(JSON.parse(line.slice(6)), "direct"); } catch {}
-          }
+      const {job_id} = await res.json();
+      addLog("info","ℹ",`Verificando ${urls.length} URLs...`);
+      document.getElementById("cnt-total").textContent = urls.length;
+      document.getElementById("cnt-activas").textContent    = "0";
+      document.getElementById("cnt-eliminadas").textContent = "0";
+      document.getElementById("cnt-inciertas").textContent  = "0";
+      poll(job_id, 0, "direct");
+    } catch(err) {
+      addLog("incierta","⚠","Error al iniciar: "+err.message);
+      setButtonsDisabled(false);
+    }
+  }
+
+  // ── Bucle de polling ────────────────────────────────────────────────────────
+  async function poll(jobId, offset, mode) {
+    _stopPoll();
+    try {
+      const res  = await fetch(`/job-status/${jobId}?since=${offset}`);
+      if (!res.ok) {
+        addLog("incierta","⚠",`Error HTTP ${res.status} consultando estado.`);
+        _pollTimer = setTimeout(() => poll(jobId, offset, mode), 3000);
+        return;
+      }
+      const data = await res.json();
+
+      // Mensajes de log del servidor
+      const newLogs = data.log.slice(_lastLogLen);
+      newLogs.forEach(msg => addLog("info","ℹ",msg));
+      _lastLogLen = data.log.length;
+
+      // Actualizar total
+      if (data.total > 0) {
+        document.getElementById("cnt-total").textContent = data.total;
+        if (document.getElementById("cnt-activas").textContent === "—") {
+          document.getElementById("cnt-activas").textContent    = "0";
+          document.getElementById("cnt-eliminadas").textContent = "0";
+          document.getElementById("cnt-inciertas").textContent  = "0";
         }
       }
-    } catch(err) {
-      addLog("incierta","⚠","Error: "+err.message);
-    }
-    setButtonsDisabled(false);
-  }
 
-  function handleEvent(data, mode) {
-    switch(data.type) {
-      case "status":
-        addLog("info","ℹ",data.message);
-        document.getElementById("progress-label").textContent = data.message;
-        break;
+      // Procesar nuevos resultados
+      const newCount = data.new_results.length;
+      if (newCount > 0) {
+        _allResults.push(...data.new_results);
+        const current = _allResults.length;
+        const total   = data.total || current;
 
-      case "total":
-        document.getElementById("cnt-total").textContent = data.total;
-        document.getElementById("cnt-activas").textContent = "0";
-        document.getElementById("cnt-eliminadas").textContent = "0";
-        document.getElementById("cnt-inciertas").textContent = "0";
-        break;
+        // Actualizar contadores y barra
+        document.getElementById("cnt-activas").textContent    = data.counters.activas;
+        document.getElementById("cnt-eliminadas").textContent = data.counters.eliminadas;
+        document.getElementById("cnt-inciertas").textContent  = data.counters.inciertas;
+        updateProgress(current, total);
 
-      case "progress":
-        updateCounters(data);
-        updateProgress(data.current, data.total);
-        const statusClass = data.status.toLowerCase();
-        const icon = data.status==="ACTIVA" ? "✓" : data.status==="ELIMINADA" ? "✗" : "?";
-        addLog(statusClass, icon,
-          `[${data.current}/${data.total}] ${data.status} — ${data.url}`);
-        if (data.detail) addLogDetail(data.detail);
-        if (data.evidence && data.evidence.length > 0) {
-          addLogDetail("Evidencia: " + data.evidence.join(" | "));
-        }
-        break;
+        // Log de cada resultado nuevo
+        data.new_results.forEach((r, i) => {
+          const idx  = offset + i + 1;
+          const icon = r.status==="ACTIVA" ? "✓" : r.status==="ELIMINADA" ? "✗" : "?";
+          addLog(r.status.toLowerCase(), icon, `[${idx}/${total}] ${r.status} — ${r.url}`);
+          if (r.detail)   addLogDetail(r.detail);
+          if (r.evidence && r.evidence.length)
+            addLogDetail("Evidencia: " + r.evidence.join(" | "));
+        });
+      }
 
-      case "done":
-        updateCounters(data);
+      // Error del servidor
+      if (data.error) {
+        showError(data.error);
+        setButtonsDisabled(false);
+        return;
+      }
+
+      // Terminado
+      if (data.done) {
         updateProgress(data.total, data.total);
         document.getElementById("progress-label").textContent = "¡Verificación completada!";
-        if (mode==="direct" && data.rows) showResultDirect(data);
-        else showResultSheet(data);
+        if (mode === "direct") showResultDirect(data);
+        else                   showResultSheet(data);
         setButtonsDisabled(false);
-        if (eventSource) eventSource.close();
-        break;
+        return;
+      }
 
-      case "error":
-        addLog("incierta","✗", data.message);
-        document.getElementById("progress-label").textContent = "Error: "+data.message;
-        showError(data.message);
-        setButtonsDisabled(false);
-        if (eventSource) eventSource.close();
-        break;
+      // Seguir polling
+      _pollTimer = setTimeout(() => poll(jobId, data.offset, mode), 2000);
+
+    } catch(err) {
+      // Error de red: reintentar en 3s
+      _pollTimer = setTimeout(() => poll(jobId, offset, mode), 3000);
     }
   }
 
-  function updateCounters(data) {
-    if (data.total      !== undefined) document.getElementById("cnt-total").textContent      = data.total;
-    if (data.activas    !== undefined) document.getElementById("cnt-activas").textContent    = data.activas;
-    if (data.eliminadas !== undefined) document.getElementById("cnt-eliminadas").textContent = data.eliminadas;
-    if (data.inciertas  !== undefined) document.getElementById("cnt-inciertas").textContent  = data.inciertas;
-  }
-
+  // ── Helpers de UI ──────────────────────────────────────────────────────────
   function updateProgress(current, total) {
-    const pct = total > 0 ? Math.round((current/total)*100) : 0;
+    const pct = total > 0 ? Math.round(current/total*100) : 0;
     const bar = document.getElementById("progress-bar");
     bar.style.width = pct+"%";
     bar.classList.add("pulsing");
     document.getElementById("progress-label").textContent =
       `Verificando ${current} de ${total} (${pct}%)`;
-    if (current >= total) {
+    if (current >= total && total > 0) {
       bar.classList.remove("pulsing");
       document.getElementById("spinner").classList.remove("visible");
     }
   }
 
   function addLog(type, icon, text) {
-    const box = document.getElementById("log-box");
+    const box  = document.getElementById("log-box");
     const line = document.createElement("div");
     line.className = `log-line ${type}`;
     line.innerHTML = `<span class="log-icon">${icon}</span><span class="log-text">${escapeHtml(text)}</span>`;
@@ -306,7 +310,7 @@
 
   function addLogDetail(text) {
     const box = document.getElementById("log-box");
-    const d = document.createElement("div");
+    const d   = document.createElement("div");
     d.className = "log-detail";
     d.textContent = text;
     box.appendChild(d);
@@ -317,8 +321,8 @@
     const card = document.getElementById("result-card");
     card.classList.add("visible");
     document.getElementById("result-text").textContent =
-      `Listo. ${data.activas} activas · ${data.eliminadas} eliminadas · ${data.inciertas} inciertas`+
-      (data.results_tab ? ` — guardado en "${data.results_tab}"` : "")+"." ;
+      `Listo. ${data.counters.activas} activas · ${data.counters.eliminadas} eliminadas · ${data.counters.inciertas} inciertas`+
+      (data.results_tab ? ` — guardado en "${data.results_tab}"` : "")+".";
     const link = document.getElementById("result-link");
     if (data.sheet_url) { link.href = data.sheet_url; link.style.display=""; }
     else link.style.display = "none";
@@ -328,21 +332,20 @@
     const card = document.getElementById("result-card");
     card.classList.add("visible");
     document.getElementById("result-text").textContent =
-      `Listo. ${data.activas} activas · ${data.eliminadas} eliminadas · ${data.inciertas} inciertas.`;
+      `Listo. ${data.counters.activas} activas · ${data.counters.eliminadas} eliminadas · ${data.counters.inciertas} inciertas.`;
     document.getElementById("result-link").style.display = "none";
 
     const tbody = document.getElementById("results-tbody");
     tbody.innerHTML = "";
-    (data.rows||[]).forEach((row,i) => {
-      const tr = document.createElement("tr");
-      const evidenceHtml = row.evidence && row.evidence.length
-        ? `<div class="evidence-list">${escapeHtml(row.evidence.join(" | "))}</div>`
-        : "";
+    _allResults.forEach((row, i) => {
+      const tr  = document.createElement("tr");
+      const ev  = row.evidence && row.evidence.length
+        ? `<div class="evidence-list">${escapeHtml(row.evidence.join(" | "))}</div>` : "";
       tr.innerHTML =
         `<td>${i+1}</td>`+
         `<td><a href="${escapeHtml(row.url)}" target="_blank" style="color:#4f46e5">${escapeHtml(row.url)}</a></td>`+
         `<td><span class="badge ${row.status}">${row.status}</span></td>`+
-        `<td>${escapeHtml(row.detail||"")}${evidenceHtml}</td>`;
+        `<td>${escapeHtml(row.detail||"")}${ev}</td>`;
       tbody.appendChild(tr);
     });
     document.getElementById("results-table-wrap").classList.add("visible");
@@ -355,6 +358,7 @@
     document.getElementById("result-link").style.display = "none";
     document.getElementById("spinner").classList.remove("visible");
     document.getElementById("progress-bar").classList.remove("pulsing");
+    _stopPoll();
   }
 
   function showProgressSection() {
@@ -364,31 +368,32 @@
   }
 
   function resetUI() {
+    _stopPoll();
+    _allResults = [];
+    _lastLogLen = 0;
     ["cnt-total","cnt-activas","cnt-eliminadas","cnt-inciertas"].forEach(id =>
       document.getElementById(id).textContent = "—");
     document.getElementById("log-box").innerHTML = "";
     const bar = document.getElementById("progress-bar");
-    bar.style.width = "0%";
-    bar.classList.remove("pulsing");
+    bar.style.width = "0%"; bar.classList.remove("pulsing");
     document.getElementById("spinner").classList.remove("visible");
     document.getElementById("progress-label").textContent = "Iniciando...";
     document.getElementById("result-card").classList.remove("visible","error-card");
     document.getElementById("result-link").style.display = "";
     document.getElementById("results-table-wrap").classList.remove("visible");
     document.getElementById("results-tbody").innerHTML = "";
+    document.getElementById("progress-section").classList.remove("visible");
   }
 
   function setButtonsDisabled(val) {
-    document.getElementById("btn-check-sheet").disabled = val;
+    document.getElementById("btn-check-sheet").disabled  = val;
     document.getElementById("btn-check-direct").disabled = val;
   }
 
   function escapeHtml(text) {
     return String(text)
-      .replace(/&/g,"&amp;")
-      .replace(/</g,"&lt;")
-      .replace(/>/g,"&gt;")
-      .replace(/"/g,"&quot;");
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+      .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   }
 </script>
 </body>
