@@ -41,7 +41,7 @@ def _classify_final_url(final_url: str, status_code: int) -> dict:
     # Indicadores de reseña activa en la URL
     active_indicators = [
         "/maps/reviews/",
-        "!3e1",   # parámetro de review en Google Maps
+        "!3e1",
         "!3e2",
         "!3e3",
         "contrib",

@@ -69,7 +69,7 @@ async def run_agent(sheet_url: str) -> AsyncGenerator[str, None]:
         yield sse({"type": "error", "message": "No hay URLs para verificar."})
         return
 
-    yield sse({"type": "status", "message": f"Verificando {total} reseñas con Playwright..."})
+    yield sse({"type": "status", "message": f"Verificando {total} reseñas..."})
 
     counters = {"activas": 0, "eliminadas": 0, "errores": 0}
     results = []
