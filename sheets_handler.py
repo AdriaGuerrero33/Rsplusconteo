@@ -64,7 +64,6 @@ def detect_url_column(rows: list[list[str]]) -> Optional[int]:
     if not rows:
         return None
 
-    # Contar hits de URLs de Google Maps por columna en las primeras 20 filas
     sample_rows = rows[:20]
     num_cols = max(len(row) for row in sample_rows) if sample_rows else 0
     col_hits = [0] * num_cols
@@ -90,12 +89,11 @@ def extract_urls(rows: list[list[str]], col_idx: int) -> list[dict]:
         cell_value = row[col_idx].strip() if col_idx < len(row) else ""
         if not cell_value:
             continue
-        # Saltar encabezado (primera fila sin URL válida)
         if row_idx == 0 and not GOOGLE_MAPS_URL_PATTERN.search(cell_value):
             continue
         if GOOGLE_MAPS_URL_PATTERN.search(cell_value):
             results.append({
-                "row": row_idx + 1,  # 1-based para Google Sheets
+                "row": row_idx + 1,
                 "url": cell_value,
                 "row_data": row,
             })
@@ -119,36 +117,20 @@ def write_results(
     results: list[dict],
     source_headers: Optional[list[str]] = None,
 ) -> None:
-    """
-    Escribe los resultados en la pestaña de destino.
-
-    Columnas escritas:
-      - Todas las columnas originales de la fila fuente
-      - Estado: ACTIVA / ELIMINADA / ERROR
-      - Detalle: mensaje adicional
-      - URL verificada
-    """
     header_row = []
     if source_headers:
         header_row = list(source_headers)
-
-    # Añadir columnas de resultado al final
     extra_cols = ["Estado", "Detalle", "URL_Verificada"]
     header_row.extend(extra_cols)
-
     rows_to_write = [header_row]
-
     for item in results:
         row_data = list(item.get("row_data", []))
         row_data.append(item.get("status", "ERROR"))
         row_data.append(item.get("detail", ""))
         row_data.append(item.get("url", ""))
         rows_to_write.append(row_data)
-
     if rows_to_write:
         worksheet.update(rows_to_write, value_input_option="RAW")
-
-    # Formatear encabezado en negrita
     try:
         worksheet.format("1:1", {"textFormat": {"bold": True}})
     except Exception:
@@ -156,7 +138,6 @@ def write_results(
 
 
 def write_summary(worksheet: gspread.Worksheet, summary: dict, start_row: int) -> None:
-    """Escribe un resumen con totales al final de la hoja de resultados."""
     summary_rows = [
         [],
         ["=== RESUMEN ==="],

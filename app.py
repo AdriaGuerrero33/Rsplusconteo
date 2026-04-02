@@ -11,7 +11,6 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
 import sheets_handler
@@ -32,12 +31,9 @@ def sse_event(data: dict) -> str:
 
 
 async def run_agent(sheet_url: str) -> AsyncGenerator[str, None]:
-    """Generador que ejecuta el agente y emite eventos SSE con el progreso."""
-
     async def emit(event_type: str, **kwargs):
         yield sse_event({"type": event_type, **kwargs})
 
-    # --- Conexión con Google Sheets ---
     async for chunk in emit("status", message="Conectando con Google Sheets..."):
         yield chunk
 
@@ -54,7 +50,6 @@ async def run_agent(sheet_url: str) -> AsyncGenerator[str, None]:
     async for chunk in emit("status", message=f'Conectado a "{sheet_title}" → pestaña "{worksheet.title}"'):
         yield chunk
 
-    # --- Lectura de datos ---
     async for chunk in emit("status", message="Leyendo datos de la hoja..."):
         yield chunk
 
@@ -94,7 +89,6 @@ async def run_agent(sheet_url: str) -> AsyncGenerator[str, None]:
     async for chunk in emit("status", message=f"Verificando {total} reseñas con Playwright..."):
         yield chunk
 
-    # --- Verificación con progreso en tiempo real ---
     results_so_far = []
     counters = {"activas": 0, "eliminadas": 0, "errores": 0}
     progress_queue: asyncio.Queue = asyncio.Queue()
@@ -135,7 +129,6 @@ async def run_agent(sheet_url: str) -> AsyncGenerator[str, None]:
 
     results = await agent_task
 
-    # --- Escritura de resultados ---
     async for chunk in emit("status", message=f'Escribiendo resultados en la pestaña "{RESULTS_TAB}"...'):
         yield chunk
 
@@ -155,7 +148,6 @@ async def run_agent(sheet_url: str) -> AsyncGenerator[str, None]:
             yield chunk
         return
 
-    # Construir enlace directo a la pestaña de resultados
     sheet_id = spreadsheet.id
     results_sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
 
