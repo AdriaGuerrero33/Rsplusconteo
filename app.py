@@ -2,6 +2,7 @@
 Servidor web para el agente de verificación de reseñas de Google Maps.
 """
 
+import asyncio
 import json
 import os
 from typing import AsyncGenerator
@@ -26,6 +27,39 @@ DELAY = float(os.getenv("DELAY_BETWEEN_CHECKS", "1.5"))
 
 def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+SSE_PING = "data: {\"type\":\"ping\"}\n\n"
+KEEPALIVE_INTERVAL = 8.0  # segundos entre pings si no llega ningún resultado
+
+
+async def _with_keepalive(source: AsyncGenerator[str, None]) -> AsyncGenerator[str, None]:
+    """
+    Envuelve un async generator de SSE y emite pings periódicos si no llega
+    ningún evento en KEEPALIVE_INTERVAL segundos. Evita que Railway/nginx
+    corte la conexión SSE por inactividad durante el procesamiento con Playwright.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _consume():
+        try:
+            async for item in source:
+                await queue.put(("item", item))
+        finally:
+            await queue.put(("done", None))
+
+    task = asyncio.create_task(_consume())
+    try:
+        while True:
+            try:
+                kind, value = await asyncio.wait_for(queue.get(), timeout=KEEPALIVE_INTERVAL)
+                if kind == "done":
+                    break
+                yield value
+            except asyncio.TimeoutError:
+                yield SSE_PING
+    finally:
+        await task
 
 
 def _empty_counters() -> dict:
@@ -191,7 +225,7 @@ async def health():
 @app.get("/check")
 async def check(sheet_url: str, request: Request):
     return StreamingResponse(
-        run_agent(sheet_url),
+        _with_keepalive(run_agent(sheet_url)),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -204,7 +238,7 @@ class DirectCheckRequest(BaseModel):
 @app.post("/check-direct")
 async def check_direct(body: DirectCheckRequest):
     return StreamingResponse(
-        run_direct(body.urls),
+        _with_keepalive(run_direct(body.urls)),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
