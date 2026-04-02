@@ -1,378 +1,234 @@
 """
-Verificador de reseñas Google Maps.
+Verificador de reseñas Google Maps — sin Playwright, solo httpx.
+
+Playwright no puede conectarse desde Railway (timeout de red del contenedor).
+httpx sí funciona: la respuesta HTML inicial de Google Maps contiene señales
+suficientes para clasificar cada reseña.
 
 Clasificación:
-  ACTIVA    — se encontró texto de reseña real en la página
-  ELIMINADA — se encontró el mensaje "no longer available" u equivalentes
-  INCIERTA  — no hay evidencia suficiente (timeout, consent bloqueado, etc.)
-
-Estrategia de detección:
-  1. Navegar → detectar y descartar GDPR consent (servidores EU)
-  2. Esperar señal específica: mensaje de eliminación O estrellas de reseña
-  3. Intentar extraer el texto real de la reseña
-  4. Si hay texto de reseña → ACTIVA (con snippet)
-  5. Si hay mensaje de eliminación → ELIMINADA
-  6. Si ninguno → INCIERTA
+  ACTIVA    — se encontró texto real de reseña en el HTML
+  ELIMINADA — se encontró frase de eliminación en el HTML
+  INCIERTA  — no hay señal suficiente en la respuesta
 """
 
 import asyncio
+import json as _json
 import re
 from typing import AsyncGenerator
 
-from playwright.async_api import async_playwright, Page, TimeoutError as PlaywrightTimeout
+import httpx
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
-)
+# ─── Constantes ──────────────────────────────────────────────────────────────
 
-# ─── Frases de eliminación (varios idiomas) ───────────────────────────────────
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+}
+
+# Frases que aparecen cuando una reseña fue eliminada
 DELETED_PHRASES: list[tuple[str, str]] = [
-    ("no longer available",       "EN: 'no longer available'"),
-    ("review is no longer",       "EN: 'review is no longer'"),
-    ("ya no está disponible",     "ES: 'ya no está disponible'"),
-    ("esta reseña ya no",         "ES: 'esta reseña ya no'"),
-    ("reseña no disponible",      "ES: 'reseña no disponible'"),
-    ("cette avis n'est plus",     "FR: avis n'est plus"),
-    ("diese rezension ist nicht", "DE: rezension ist nicht"),
+    ("no longer available",        "EN: 'no longer available'"),
+    ("review is no longer",        "EN: 'review is no longer'"),
+    ("ya no está disponible",      "ES: 'ya no está disponible'"),
+    ("esta reseña ya no",          "ES: 'esta reseña ya no'"),
+    ("reseña no disponible",       "ES: 'reseña no disponible'"),
+    ("cette avis n'est plus",      "FR: n'est plus disponible"),
+    ("diese rezension ist nicht",  "DE: rezension nicht"),
+    ("\\u003e\\u003c",             ""),   # ignorar falsos positivos de markup
 ]
 
-# ─── Selectores de estrellas (señal positiva auxiliar) ────────────────────────
-STAR_SELECTORS = [
-    "span[aria-label$=' stars']",
-    "span[aria-label$=' star']",
-    "span[aria-label$=' estrellas']",
-    "span[aria-label$=' estrella']",
-    "div[aria-label$=' stars']",
-    "div[aria-label$=' estrellas']",
-    "[aria-label*='Valoración de']",
-    "[aria-label*='Rated ']",
-]
-
-# ─── Selectores donde puede estar el texto de la reseña ──────────────────────
-REVIEW_TEXT_SELECTORS = [
-    "span.wiI7pd",            # clase estable en muchas versiones de Maps
-    "span[jsname='bN97Pc']",  # span de texto de reseña individual
-    "[data-expandable-section]",
-    "span.MyEned",
-    "div.MyEned",
-    "span[jsname='fbQN7e']",
-]
-
-STAR_TEXT_RE = re.compile(r"\b\d[,.]?\d?\s*(estrellas?|stars?)\b", re.IGNORECASE)
-
-# ─── Condición JS: esperar señal de eliminación O de estrellas ────────────────
-_WAIT_JS = """() => {
-    const t = (document.body && document.body.innerText || '').toLowerCase();
-    if (t.includes('no longer available') || t.includes('review is no longer')
-        || t.includes('ya no está disponible') || t.includes('esta reseña ya no')) {
-        return 'deleted';
-    }
-    const labeled = document.querySelectorAll('[aria-label]');
-    for (const el of labeled) {
-        const lbl = (el.getAttribute('aria-label') || '').toLowerCase();
-        if (/\\d[,.]?\\d?\\s*(star|estrella)/.test(lbl)
-            || lbl.includes('valoración de') || lbl.includes('rated ')) {
-            return 'stars';
-        }
-    }
-    return false;
-}"""
+# Patrón de puntuación de estrellas en el texto de la página
+STAR_RE = re.compile(r"\b\d[,.]?\d?\s*(estrellas?|stars?)\b", re.IGNORECASE)
 
 
-# ─── Manejo de pantalla de consentimiento GDPR ───────────────────────────────
-async def _handle_consent(page: Page) -> None:
+# ─── Extracción de texto de reseña desde HTML ─────────────────────────────────
+
+def _ld_review_body(obj) -> str:
+    """Busca reviewBody/description en JSON-LD recursivamente."""
+    if isinstance(obj, dict):
+        for k in ("reviewBody", "description", "text"):
+            v = obj.get(k, "")
+            if isinstance(v, str) and len(v) > 15:
+                return v
+        for v in obj.values():
+            r = _ld_review_body(v)
+            if r:
+                return r
+    elif isinstance(obj, list):
+        for item in obj:
+            r = _ld_review_body(item)
+            if r:
+                return r
+    return ""
+
+
+def _extract_review_text(html: str) -> str:
     """
-    Detecta y descarta la pantalla de consentimiento GDPR de Google.
-    Obligatoria en servidores europeos (Railway europe-west4).
+    Intenta extraer el texto de la reseña del HTML inicial.
+    Orden de intento:
+      1. JSON-LD (<script type="application/ld+json">)
+      2. Meta description / og:description
+      3. Strings largos embebidos en datos JS de Google
     """
-    if "consent.google" not in page.url:
-        return
+    # 1. JSON-LD
+    for ld_raw in re.findall(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html, re.DOTALL | re.IGNORECASE
+    ):
+        try:
+            text = _ld_review_body(_json.loads(ld_raw.strip()))
+            if text:
+                return text[:350]
+        except Exception:
+            pass
 
-    print(f"[consent] Detectada en: {page.url[:80]}", flush=True)
-
-    # Intentar hacer clic en "Aceptar todo"
-    for sel in [
-        "#L2AGLb",
-        "button.tHlp8d",
-        "form[action*='consent'] button[jsname='b3VHJd']",
-        "form[action*='consent'] button[type='submit']:last-of-type",
-        "form[action*='consent'] button:last-of-type",
-        "button[aria-label='Accept all']",
-        "button[aria-label='Aceptar todo']",
+    # 2. Meta description
+    for pattern in [
+        r'<meta\s+name=["\']description["\'][^>]+content=["\']([^"\']{30,})["\']',
+        r'<meta\s+content=["\']([^"\']{30,})["\'][^>]+name=["\']description["\']',
+        r'<meta\s+property=["\']og:description["\'][^>]+content=["\']([^"\']{30,})["\']',
     ]:
-        try:
-            btn = await page.query_selector(sel)
-            if btn:
-                await btn.click()
-                print(f"[consent] Clic en {sel}", flush=True)
-                # Esperar a que la URL deje de ser consent.google
-                try:
-                    await page.wait_for_function(
-                        "() => !window.location.href.includes('consent.google')",
-                        timeout=10_000,
-                    )
-                except PlaywrightTimeout:
-                    pass
-                # Dar tiempo extra para que Maps cargue
-                try:
-                    await page.wait_for_load_state("domcontentloaded", timeout=5_000)
-                except Exception:
-                    pass
-                print(f"[consent] Tras clic: {page.url[:80]}", flush=True)
-                return
-        except Exception:
+        m = re.search(pattern, html, re.IGNORECASE)
+        if m:
+            desc = m.group(1).strip()
+            # Excluir descripciones genéricas de Maps
+            if not any(p in desc.lower() for p in [
+                "google maps", "cómo llegar", "how to get", "street view", "reviews for", "opiniones de"
+            ]):
+                return desc[:350]
+
+    # 3. Datos embebidos en JS de Google Maps
+    # Google codifica los datos de la página en estructuras JSON dentro de scripts.
+    # Buscamos strings que parezcan texto de reseña: ≥6 palabras, ≤300 chars,
+    # sin URLs ni marcado.
+    seen = set()
+    for raw in re.findall(r'"([^"\\]{40,300})"', html):
+        # Decodificar escapes básicos
+        text = raw.replace("\\n", " ").replace("\\t", " ").strip()
+        if text in seen:
             continue
-
-    print("[consent] No se encontró botón de aceptar", flush=True)
-
-
-# ─── Extracción de texto de reseña ───────────────────────────────────────────
-async def _extract_review_text(page: Page, page_text: str) -> str:
-    """
-    Intenta extraer el texto real de la reseña.
-    Devuelve un snippet (≤300 chars) o cadena vacía si no encuentra nada.
-    """
-    # 1. Selectores específicos
-    for sel in REVIEW_TEXT_SELECTORS:
-        try:
-            elements = await page.query_selector_all(sel)
-            for el in elements:
-                text = (await el.inner_text()).strip()
-                # El texto de la reseña tiene al menos 10 caracteres y varias palabras
-                if len(text) >= 10 and len(text.split()) >= 3:
-                    return text[:300]
-        except Exception:
+        seen.add(text)
+        # Filtrar URLs, HTML, código
+        if text.startswith(("http", "/", "{")):
             continue
-
-    # 2. Heurística: buscar en el texto de la página párrafos "tipo reseña"
-    #    El texto de la reseña aparece después de las estrellas/autor, antes de "Útil"/"Helpful"
-    lines = [l.strip() for l in page_text.splitlines() if l.strip()]
-
-    # Buscar dónde están las estrellas
-    star_line_idx = -1
-    for i, line in enumerate(lines):
-        if STAR_TEXT_RE.search(line.lower()):
-            star_line_idx = i
-            break
-
-    if star_line_idx >= 0:
-        # Tomar las siguientes líneas como candidatas a texto de reseña
-        candidates = []
-        for line in lines[star_line_idx + 1 : star_line_idx + 10]:
-            # Filtrar líneas que son botones/UI (muy cortas o palabras únicas)
-            if len(line) >= 15 and len(line.split()) >= 4:
-                # Excluir patrones UI conocidos
-                lower = line.lower()
-                if not any(p in lower for p in ["translate", "helpful", "útil", "flag", "google", "maps"]):
-                    candidates.append(line)
-        if candidates:
-            return candidates[0][:300]
+        if any(c in text for c in ("<", ">", "\\", "=", ";", "{", "}")):
+            continue
+        words = text.split()
+        # Debe tener ≥6 palabras y ninguna excesivamente larga (no código)
+        if len(words) >= 6 and all(len(w) <= 25 for w in words):
+            return text[:350]
 
     return ""
 
 
 # ─── Verificación de una URL ──────────────────────────────────────────────────
-async def _check_single_review(page: Page, url: str) -> dict:
+
+async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
     """
-    Devuelve:
-      status      : ACTIVA | ELIMINADA | INCIERTA
-      detail      : motivo legible
-      evidence    : lista de señales encontradas
-      review_text : snippet del texto de la reseña (o "" si no se encontró)
-      final_url   : URL tras redirecciones
+    Clasifica una URL de reseña mediante análisis del HTML inicial.
+    No usa navegador — solo httpx.
     """
     final_url = url
-    review_text = ""
     try:
-        # ── 1. Navegar ────────────────────────────────────────────────────────
-        # wait_until="commit" = resuelve en cuanto llegan las cabeceras HTTP
-        # (mucho antes que domcontentloaded en una SPA pesada como Maps)
-        response = await page.goto(url, wait_until="commit", timeout=30_000)
-        final_url = page.url
+        r = await client.get(url)
+        final_url = str(r.url)
+        html = r.text
+        html_lower = html.lower()
 
-        # Esperar a que el DOM básico esté listo (sin timeout fatal)
-        try:
-            await page.wait_for_load_state("domcontentloaded", timeout=15_000)
-        except PlaywrightTimeout:
-            pass
+        print(f"[check] {url[:60]} → HTTP {r.status_code} | {len(html)} chars | final={final_url[:80]}", flush=True)
 
-        if response and response.status >= 400:
-            return {
-                "status": "INCIERTA",
-                "detail": f"HTTP {response.status}",
-                "evidence": [f"HTTP {response.status}"],
-                "review_text": "",
-                "final_url": final_url,
-            }
-
-        # ── 2. Descartar GDPR consent (crítico en EU) ─────────────────────────
-        await _handle_consent(page)
-
-        # ── 3. Esperar señal relevante (máx 15s) ─────────────────────────────
-        wait_result = None
-        try:
-            wait_result = await page.wait_for_function(_WAIT_JS, timeout=15_000)
-        except PlaywrightTimeout:
-            pass
-
-        # ── 4. Leer texto de la página ────────────────────────────────────────
-        page_text = ""
-        try:
-            page_text = await page.inner_text("body")
-        except Exception:
-            pass
-        text_lower = page_text.lower()
-
-        print(f"[check] {url[:60]} → wait={wait_result} | text_len={len(page_text)}", flush=True)
-
-        # ── 5. Buscar señales de ELIMINACIÓN ──────────────────────────────────
-        deletion_evidence: list[str] = []
+        # ── A. Señal de ELIMINACIÓN ───────────────────────────────────────────
         for phrase, label in DELETED_PHRASES:
-            if phrase in text_lower:
-                deletion_evidence.append(label)
+            if not label:
+                continue  # ignorar entradas vacías
+            if phrase in html_lower:
+                print(f"[check] ELIMINADA — frase: {label!r}", flush=True)
+                return {
+                    "status": "ELIMINADA",
+                    "detail": label,
+                    "evidence": [f"HTML contiene: '{phrase}'"],
+                    "review_text": "",
+                    "final_url": final_url,
+                }
 
-        if deletion_evidence:
-            return {
-                "status": "ELIMINADA",
-                "detail": deletion_evidence[0],
-                "evidence": deletion_evidence,
-                "review_text": "",
-                "final_url": final_url,
-            }
-
-        # ── 6. Intentar extraer texto de reseña ───────────────────────────────
-        review_text = await _extract_review_text(page, page_text)
-        print(f"[check] review_text='{review_text[:60]}'" , flush=True)
+        # ── B. Extracción de texto de reseña ──────────────────────────────────
+        review_text = _extract_review_text(html)
+        print(f"[check] review_text='{review_text[:80]}'", flush=True)
 
         if review_text:
             return {
                 "status": "ACTIVA",
-                "detail": f"Texto de reseña encontrado",
-                "evidence": [f"Texto: \"{review_text[:80]}\""],
+                "detail": "Texto de reseña encontrado en HTML",
+                "evidence": [f"Texto: \"{review_text[:100]}\""],
                 "review_text": review_text,
                 "final_url": final_url,
             }
 
-        # ── 7. Señales de estrellas como respaldo ─────────────────────────────
-        star_evidence: list[str] = []
-        for sel in STAR_SELECTORS:
-            try:
-                el = await page.query_selector(sel)
-                if el:
-                    aria = await el.get_attribute("aria-label") or ""
-                    star_evidence.append(f"aria-label: '{aria}'")
-                    break
-            except Exception:
-                continue
-
-        if not star_evidence:
-            m = STAR_TEXT_RE.search(text_lower)
-            if m:
-                star_evidence.append(f"Puntuación en texto: '{m.group()}'")
-
-        if star_evidence:
+        # ── C. Señal de estrellas en el HTML ──────────────────────────────────
+        star_m = STAR_RE.search(html_lower)
+        if star_m:
+            # Estrella en el contexto de puntuación es señal activa
             return {
                 "status": "ACTIVA",
-                "detail": star_evidence[0],
-                "evidence": star_evidence,
+                "detail": f"Puntuación en HTML: '{star_m.group()}'",
+                "evidence": [f"Estrellas en HTML: '{star_m.group()}'"],
                 "review_text": "",
                 "final_url": final_url,
             }
 
-        # ── 8. Sin evidencia clara → INCIERTA ─────────────────────────────────
-        reason = (
-            "Cargó Maps pero sin texto de reseña ni mensaje de eliminación"
-            if len(page_text) > 200
-            else "Timeout: la página no cargó contenido suficiente"
-        )
+        # ── D. Sin señal ──────────────────────────────────────────────────────
         return {
             "status": "INCIERTA",
-            "detail": reason,
-            "evidence": [f"URL: {final_url[:100]}", f"Texto página: {len(page_text)} chars"],
+            "detail": "Sin señales en el HTML inicial",
+            "evidence": [f"URL: {final_url[:100]}", f"HTML: {len(html)} chars"],
             "review_text": "",
             "final_url": final_url,
         }
 
-    except PlaywrightTimeout:
-        return {
-            "status": "INCIERTA",
-            "detail": "Timeout de navegación (>30s)",
-            "evidence": ["PlaywrightTimeout"],
-            "review_text": "",
-            "final_url": final_url,
-        }
+    except httpx.TimeoutException:
+        return {"status": "INCIERTA", "detail": "Timeout HTTP (>15s)",
+                "evidence": ["TimeoutException"], "review_text": "", "final_url": final_url}
     except Exception as exc:
-        return {
-            "status": "INCIERTA",
-            "detail": f"Error: {str(exc)[:120]}",
-            "evidence": [repr(exc)[:200]],
-            "review_text": "",
-            "final_url": final_url,
-        }
+        return {"status": "INCIERTA", "detail": f"Error: {str(exc)[:120]}",
+                "evidence": [repr(exc)[:200]], "review_text": "", "final_url": final_url}
 
 
 # ─── Stream de verificación ───────────────────────────────────────────────────
+
 async def check_reviews_stream(
     url_items: list[dict],
-    max_concurrent: int = 3,
-    delay_seconds: float = 1.5,
+    max_concurrent: int = 5,
+    delay_seconds: float = 0.5,
 ) -> AsyncGenerator[dict, None]:
     semaphore = asyncio.Semaphore(max_concurrent)
     result_queue: asyncio.Queue = asyncio.Queue()
     total = len(url_items)
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",       # necesario corriendo como root en Docker
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-blink-features=AutomationControlled",
-                "--no-proxy-server",               # ignorar cualquier proxy del sistema
-                "--disable-extensions",
-                "--disable-background-networking",
-                "--disable-sync",
-                "--mute-audio",
-                "--disable-default-apps",
-            ],
-        )
-        context = await browser.new_context(
-            user_agent=USER_AGENT,
-            viewport={"width": 1280, "height": 900},
-            locale="es-ES",
-        )
-        # Bloquear recursos pesados para acelerar carga
-        await context.route(
-            "**/*.{png,jpg,jpeg,gif,webp,svg,ico,woff,woff2,ttf,otf,mp4,mp3}",
-            lambda route: route.abort(),
-        )
+    # Un único cliente httpx compartido para todas las peticiones
+    async with httpx.AsyncClient(
+        headers=HEADERS,
+        follow_redirects=True,
+        timeout=15,
+        max_redirects=10,
+    ) as client:
 
         async def check_one(idx: int, item: dict):
             async with semaphore:
                 if idx > 0:
                     await asyncio.sleep(delay_seconds)
-                page = await context.new_page()
-                try:
-                    result = await _check_single_review(page, item["url"])
-                    result = {**item, **result, "index": idx}
-                except Exception as exc:
-                    result = {
-                        **item,
-                        "status": "INCIERTA",
-                        "detail": f"Fallo: {str(exc)[:100]}",
-                        "evidence": [],
-                        "review_text": "",
-                        "index": idx,
-                    }
-                finally:
-                    try:
-                        await page.close()
-                    except Exception:
-                        pass
+                result = await _check_single_review(client, item["url"])
+                result = {**item, **result, "index": idx}
             await result_queue.put(result)
 
         tasks = [asyncio.create_task(check_one(i, item)) for i, item in enumerate(url_items)]
@@ -380,24 +236,22 @@ async def check_reviews_stream(
         received = 0
         while received < total:
             try:
-                result = await asyncio.wait_for(result_queue.get(), timeout=120.0)
+                result = await asyncio.wait_for(result_queue.get(), timeout=60.0)
                 yield result
                 received += 1
             except asyncio.TimeoutError:
                 break
 
         await asyncio.gather(*tasks, return_exceptions=True)
-        await context.close()
-        await browser.close()
 
 
-# ─── Compatibilidad con CLI ───────────────────────────────────────────────────
-async def check_reviews(url_items, max_concurrent=3, delay_seconds=1.5, progress_callback=None):
+# ─── Compatibilidad CLI ───────────────────────────────────────────────────────
+
+async def check_reviews(url_items, max_concurrent=5, delay_seconds=0.5, progress_callback=None):
     results = {}
-    total = len(url_items)
     async for result in check_reviews_stream(url_items, max_concurrent, delay_seconds):
         idx = result.get("index", 0)
         results[idx] = result
         if progress_callback:
-            progress_callback(len(results), total, result)
-    return [results.get(i) for i in range(total)]
+            progress_callback(len(results), len(url_items), result)
+    return [results.get(i) for i in range(len(url_items))]
