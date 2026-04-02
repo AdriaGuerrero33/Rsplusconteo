@@ -1,14 +1,10 @@
 """
 Verificador de reseñas Google Maps — sin Playwright, solo httpx.
 
-Playwright no puede conectarse desde Railway (timeout de red del contenedor).
-httpx sí funciona: la respuesta HTML inicial de Google Maps contiene señales
-suficientes para clasificar cada reseña.
-
-Clasificación:
-  ACTIVA    — se encontró texto real de reseña en el HTML
-  ELIMINADA — se encontró frase de eliminación en el HTML
-  INCIERTA  — no hay señal suficiente en la respuesta
+Estrategia de detección (en orden):
+  1. Fetch directo con bypass del consent GDPR (POST real al formulario)
+  2. Si falla, Jina.ai Reader (renderiza JS, evita consent desde sus servidores)
+  3. Clasificación: ACTIVA | ELIMINADA | INCIERTA
 """
 
 import asyncio
@@ -210,69 +206,166 @@ async def _fetch_bypassing_consent(
     return r.text, str(r.url)
 
 
+# ─── Jina.ai Reader (fallback) ───────────────────────────────────────────────
+
+async def _fetch_via_jina(client: httpx.AsyncClient, url: str) -> tuple[str, str]:
+    """
+    Usa Jina AI Reader (r.jina.ai) como proxy.
+    Renderiza JavaScript desde sus propios servidores (fuera EU), devuelve
+    texto limpio en markdown. Evita el consent GDPR de Google completamente.
+    """
+    jina_url = f"https://r.jina.ai/{url}"
+    print(f"[jina] Fetching {jina_url[:80]}", flush=True)
+    r = await client.get(
+        jina_url,
+        headers={
+            "Accept": "text/plain",
+            "User-Agent": "Mozilla/5.0 (compatible)",
+            "X-No-Cache": "true",
+        },
+        follow_redirects=True,
+        timeout=30,
+    )
+    text = r.text
+    print(f"[jina] {r.status_code} | {len(text)} chars", flush=True)
+    return text, str(r.url)
+
+
+def _classify_from_text(text: str, source: str = "") -> dict | None:
+    """
+    Clasifica una reseña a partir de texto plano (p.ej. respuesta de Jina).
+    Retorna dict de resultado o None si no hay señal.
+    """
+    text_lower = text.lower()
+
+    # Señales de eliminación
+    for phrase, label in DELETED_PHRASES:
+        if not label:
+            continue
+        if phrase in text_lower:
+            return {
+                "status": "ELIMINADA",
+                "detail": f"{label} [{source}]",
+                "evidence": [f"Texto contiene: '{phrase}'"],
+                "review_text": "",
+            }
+
+    # Señal de estrellas
+    star_m = STAR_RE.search(text_lower)
+
+    # Extraer texto de reseña (para texto plano, relajamos el filtro)
+    review_text = ""
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    for line in lines:
+        # Saltar líneas de navegación / metadata típicas de Jina
+        if any(skip in line.lower() for skip in [
+            "google maps", "sign in", "directions", "open in", "share",
+            "saved", "nearby", "photos", "reviews", "overview", "menu",
+            "r.jina.ai", "jina", "http", "©", "terms", "privacy",
+        ]):
+            continue
+        words = line.split()
+        letters = sum(1 for c in line if c.isalpha())
+        if (len(words) >= 5
+                and letters / max(len(line), 1) > 0.55
+                and all(len(w) <= 25 for w in words)):
+            review_text = line[:350]
+            break
+
+    if review_text:
+        return {
+            "status": "ACTIVA",
+            "detail": f"Texto de reseña encontrado [{source}]",
+            "evidence": [f"Texto: \"{review_text[:100]}\""],
+            "review_text": review_text,
+        }
+
+    if star_m:
+        return {
+            "status": "ACTIVA",
+            "detail": f"Puntuación encontrada [{source}]: '{star_m.group()}'",
+            "evidence": [f"Estrellas: '{star_m.group()}'"],
+            "review_text": "",
+        }
+
+    return None
+
+
 # ─── Verificación de una URL ──────────────────────────────────────────────────
 
 async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
     """
-    Clasifica una URL de reseña mediante análisis del HTML inicial.
-    No usa navegador — solo httpx.
+    Clasifica una URL de reseña.
+    Intento 1: fetch directo con bypass consent GDPR (POST al formulario).
+    Intento 2: Jina.ai Reader si el primero da INCIERTA.
     """
     final_url = url
     try:
+        # ── Intento 1: fetch directo con bypass consent ───────────────────────
         html, final_url = await _fetch_bypassing_consent(client, url)
         html_lower = html.lower()
         print(f"[check] {url[:60]} | {len(html)} chars | final={final_url[:80]}", flush=True)
 
-        # ── A. Señal de ELIMINACIÓN ───────────────────────────────────────────
-        for phrase, label in DELETED_PHRASES:
-            if not label:
-                continue  # ignorar entradas vacías
-            if phrase in html_lower:
-                print(f"[check] ELIMINADA — frase: {label!r}", flush=True)
+        still_on_consent = "consent.google.com" in final_url
+
+        if not still_on_consent:
+            for phrase, label in DELETED_PHRASES:
+                if not label:
+                    continue
+                if phrase in html_lower:
+                    print(f"[check] ELIMINADA — frase: {label!r}", flush=True)
+                    return {
+                        "status": "ELIMINADA",
+                        "detail": label,
+                        "evidence": [f"HTML contiene: '{phrase}'"],
+                        "review_text": "",
+                        "final_url": final_url,
+                    }
+
+            review_text = _extract_review_text(html)
+            print(f"[check] review_text='{review_text[:80]}'", flush=True)
+            if review_text:
                 return {
-                    "status": "ELIMINADA",
-                    "detail": label,
-                    "evidence": [f"HTML contiene: '{phrase}'"],
+                    "status": "ACTIVA",
+                    "detail": "Texto de reseña encontrado en HTML",
+                    "evidence": [f"Texto: \"{review_text[:100]}\""],
+                    "review_text": review_text,
+                    "final_url": final_url,
+                }
+
+            star_m = STAR_RE.search(html_lower)
+            if star_m:
+                return {
+                    "status": "ACTIVA",
+                    "detail": f"Puntuación en HTML: '{star_m.group()}'",
+                    "evidence": [f"Estrellas en HTML: '{star_m.group()}'"],
                     "review_text": "",
                     "final_url": final_url,
                 }
 
-        # ── B. Extracción de texto de reseña ──────────────────────────────────
-        review_text = _extract_review_text(html)
-        print(f"[check] review_text='{review_text[:80]}'", flush=True)
+        # ── Intento 2: Jina.ai Reader ─────────────────────────────────────────
+        print(f"[check] Sin señal directa {'(consent)' if still_on_consent else ''} → probando Jina.ai", flush=True)
+        try:
+            jina_text, jina_url = await _fetch_via_jina(client, url)
+            result = _classify_from_text(jina_text, source="Jina")
+            if result:
+                result["final_url"] = jina_url
+                return result
+            print(f"[jina] Sin señal en respuesta Jina ({len(jina_text)} chars)", flush=True)
+        except Exception as je:
+            print(f"[jina] Error: {je}", flush=True)
 
-        if review_text:
-            return {
-                "status": "ACTIVA",
-                "detail": "Texto de reseña encontrado en HTML",
-                "evidence": [f"Texto: \"{review_text[:100]}\""],
-                "review_text": review_text,
-                "final_url": final_url,
-            }
-
-        # ── C. Señal de estrellas en el HTML ──────────────────────────────────
-        star_m = STAR_RE.search(html_lower)
-        if star_m:
-            # Estrella en el contexto de puntuación es señal activa
-            return {
-                "status": "ACTIVA",
-                "detail": f"Puntuación en HTML: '{star_m.group()}'",
-                "evidence": [f"Estrellas en HTML: '{star_m.group()}'"],
-                "review_text": "",
-                "final_url": final_url,
-            }
-
-        # ── D. Sin señal ──────────────────────────────────────────────────────
+        # ── Sin señal en ningún intento ───────────────────────────────────────
         return {
             "status": "INCIERTA",
-            "detail": "Sin señales en el HTML inicial",
+            "detail": "Sin señales tras fetch directo y Jina.ai",
             "evidence": [f"URL: {final_url[:100]}", f"HTML: {len(html)} chars"],
             "review_text": "",
             "final_url": final_url,
         }
 
     except httpx.TimeoutException:
-        return {"status": "INCIERTA", "detail": "Timeout HTTP (>15s)",
+        return {"status": "INCIERTA", "detail": "Timeout HTTP (>20s)",
                 "evidence": ["TimeoutException"], "review_text": "", "final_url": final_url}
     except Exception as exc:
         return {"status": "INCIERTA", "detail": f"Error: {str(exc)[:120]}",
