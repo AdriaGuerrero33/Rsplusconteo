@@ -187,8 +187,16 @@ async def _check_single_review(page: Page, url: str) -> dict:
     review_text = ""
     try:
         # ── 1. Navegar ────────────────────────────────────────────────────────
-        response = await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+        # wait_until="commit" = resuelve en cuanto llegan las cabeceras HTTP
+        # (mucho antes que domcontentloaded en una SPA pesada como Maps)
+        response = await page.goto(url, wait_until="commit", timeout=30_000)
         final_url = page.url
+
+        # Esperar a que el DOM básico esté listo (sin timeout fatal)
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+        except PlaywrightTimeout:
+            pass
 
         if response and response.status >= 400:
             return {
@@ -290,7 +298,7 @@ async def _check_single_review(page: Page, url: str) -> dict:
     except PlaywrightTimeout:
         return {
             "status": "INCIERTA",
-            "detail": "Timeout de navegación (>20s)",
+            "detail": "Timeout de navegación (>30s)",
             "evidence": ["PlaywrightTimeout"],
             "review_text": "",
             "final_url": final_url,
@@ -320,9 +328,16 @@ async def check_reviews_stream(
             headless=True,
             args=[
                 "--no-sandbox",
-                "--disable-blink-features=AutomationControlled",
+                "--disable-setuid-sandbox",       # necesario corriendo como root en Docker
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
+                "--disable-blink-features=AutomationControlled",
+                "--no-proxy-server",               # ignorar cualquier proxy del sistema
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-sync",
+                "--mute-audio",
+                "--disable-default-apps",
             ],
         )
         context = await browser.new_context(
@@ -365,7 +380,7 @@ async def check_reviews_stream(
         received = 0
         while received < total:
             try:
-                result = await asyncio.wait_for(result_queue.get(), timeout=90.0)
+                result = await asyncio.wait_for(result_queue.get(), timeout=120.0)
                 yield result
                 received += 1
             except asyncio.TimeoutError:
