@@ -150,6 +150,61 @@ def _extract_review_text(html: str) -> str:
     return ""
 
 
+# ─── Bypass GDPR consent ─────────────────────────────────────────────────────
+
+async def _fetch_bypassing_consent(
+    client: httpx.AsyncClient, url: str
+) -> tuple[str, str]:
+    """
+    Sigue redirects manualmente. Si aparece consent.google.com, extrae el
+    parámetro 'continue' y salta directamente a la URL real con cookies forzadas.
+    httpx elimina las cookies en redirects cross-domain (RFC 7231), así que
+    tenemos que inyectarlas en cada petición manualmente.
+    """
+    from urllib.parse import urlparse, parse_qs, unquote, urljoin
+
+    cookie_header = (
+        "SOCS=CAISHAgBEhJnd3NfMjAyMzA4MjktMF9SQzEaAmRlIAEaBgiA_LynBg; "
+        "CONSENT=YES+cb.20210328-17-p0.en+FX+111"
+    )
+
+    current = url
+    for _ in range(12):
+        r = await client.get(
+            current,
+            follow_redirects=False,
+            headers={**HEADERS, "Cookie": cookie_header},
+        )
+        if r.status_code not in (301, 302, 303, 307, 308):
+            return r.text, str(r.url)
+
+        location = r.headers.get("location", "")
+        if not location:
+            return r.text, str(r.url)
+
+        # Resolver URL relativa
+        if location.startswith("/"):
+            location = urljoin(current, location)
+
+        # Saltar consent.google.com extrayendo el destino real
+        if "consent.google.com" in location:
+            qs = parse_qs(urlparse(location).query)
+            cont = qs.get("continue", [None])[0]
+            if cont:
+                location = unquote(cont)
+                print(f"[consent] saltando → {location[:80]}", flush=True)
+
+        current = location
+
+    # Último intento
+    r = await client.get(
+        current,
+        follow_redirects=False,
+        headers={**HEADERS, "Cookie": cookie_header},
+    )
+    return r.text, str(r.url)
+
+
 # ─── Verificación de una URL ──────────────────────────────────────────────────
 
 async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
@@ -159,24 +214,9 @@ async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
     """
     final_url = url
     try:
-        r = await client.get(url)
-        final_url = str(r.url)
-        html = r.text
-
-        # Si acabamos en la página de consentimiento GDPR, seguimos el enlace "continue"
-        if "consent.google.com" in final_url:
-            from urllib.parse import urlparse, parse_qs, unquote
-            qs = parse_qs(urlparse(final_url).query)
-            continue_url = qs.get("continue", [None])[0]
-            if continue_url:
-                continue_url = unquote(continue_url)
-                print(f"[check] GDPR consent interceptado → siguiendo {continue_url[:80]}", flush=True)
-                r2 = await client.get(continue_url)
-                final_url = str(r2.url)
-                html = r2.text
-
+        html, final_url = await _fetch_bypassing_consent(client, url)
         html_lower = html.lower()
-        print(f"[check] {url[:60]} → HTTP {r.status_code} | {len(html)} chars | final={final_url[:80]}", flush=True)
+        print(f"[check] {url[:60]} | {len(html)} chars | final={final_url[:80]}", flush=True)
 
         # ── A. Señal de ELIMINACIÓN ───────────────────────────────────────────
         for phrase, label in DELETED_PHRASES:
@@ -247,11 +287,8 @@ async def check_reviews_stream(
 
     # Un único cliente httpx compartido para todas las peticiones
     async with httpx.AsyncClient(
-        headers=HEADERS,
-        cookies=CONSENT_COOKIES,
-        follow_redirects=True,
+        follow_redirects=False,
         timeout=15,
-        max_redirects=10,
     ) as client:
 
         async def check_one(idx: int, item: dict):
