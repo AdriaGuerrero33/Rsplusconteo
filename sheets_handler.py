@@ -2,6 +2,8 @@
 Módulo para leer y escribir en Google Sheets usando gspread.
 """
 
+import json
+import os
 import re
 from typing import Optional
 import gspread
@@ -21,8 +23,17 @@ GOOGLE_MAPS_URL_PATTERN = re.compile(
 
 
 def authenticate(credentials_path: str) -> gspread.Client:
-    """Autentica con la API de Google Sheets usando un Service Account."""
-    creds = Credentials.from_service_account_file(credentials_path, scopes=SCOPES)
+    """
+    Autentica con la API de Google Sheets usando un Service Account.
+    Soporta credenciales desde archivo JSON o desde la variable de entorno
+    GOOGLE_CREDENTIALS_JSON (para despliegues en la nube).
+    """
+    credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if credentials_json:
+        info = json.loads(credentials_json)
+        creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+    else:
+        creds = Credentials.from_service_account_file(credentials_path, scopes=SCOPES)
     return gspread.authorize(creds)
 
 
