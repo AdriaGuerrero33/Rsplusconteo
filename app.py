@@ -83,10 +83,11 @@ async def _run_sheets_job(job_id: str, sheet_url: str) -> None:
             status = result.get("status", "INCIERTA")
             _count(job.counters, status)
             job.results.append({
-                "url":      result.get("url", ""),
-                "status":   status,
-                "detail":   result.get("detail", ""),
-                "evidence": result.get("evidence", []),
+                "url":         result.get("url", ""),
+                "status":      status,
+                "detail":      result.get("detail", ""),
+                "evidence":    result.get("evidence", []),
+                "review_text": result.get("review_text", ""),
             })
 
         job.log.append(f'Escribiendo en "{RESULTS_TAB}"...')
@@ -117,10 +118,11 @@ async def _run_direct_job(job_id: str, urls: list[str]) -> None:
             status = result.get("status", "INCIERTA")
             _count(job.counters, status)
             job.results.append({
-                "url":      result.get("url", ""),
-                "status":   status,
-                "detail":   result.get("detail", ""),
-                "evidence": result.get("evidence", []),
+                "url":         result.get("url", ""),
+                "status":      status,
+                "detail":      result.get("detail", ""),
+                "evidence":    result.get("evidence", []),
+                "review_text": result.get("review_text", ""),
             })
 
         job.done = True

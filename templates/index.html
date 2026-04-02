@@ -144,7 +144,7 @@
   <div class="card results-table-wrap" id="results-table-wrap">
     <h3>Resultados detallados</h3>
     <table>
-      <thead><tr><th>#</th><th>URL</th><th>Estado</th><th>Motivo / Evidencia</th></tr></thead>
+      <thead><tr><th>#</th><th>URL</th><th>Estado</th><th>Texto de reseña</th><th>Motivo</th></tr></thead>
       <tbody id="results-tbody"></tbody>
     </table>
   </div>
@@ -339,12 +339,16 @@
     tbody.innerHTML = "";
     _allResults.forEach((row, i) => {
       const tr  = document.createElement("tr");
-      const ev  = row.evidence && row.evidence.length
+      const reviewHtml = row.review_text
+        ? `<span style="color:#374151">${escapeHtml(row.review_text)}</span>`
+        : `<span style="color:#9ca3af;font-style:italic">${row.status==="ELIMINADA"?"—":"sin texto"}</span>`;
+      const ev = row.evidence && row.evidence.length
         ? `<div class="evidence-list">${escapeHtml(row.evidence.join(" | "))}</div>` : "";
       tr.innerHTML =
         `<td>${i+1}</td>`+
         `<td><a href="${escapeHtml(row.url)}" target="_blank" style="color:#4f46e5">${escapeHtml(row.url)}</a></td>`+
         `<td><span class="badge ${row.status}">${row.status}</span></td>`+
+        `<td style="max-width:220px;font-size:12px">${reviewHtml}</td>`+
         `<td>${escapeHtml(row.detail||"")}${ev}</td>`;
       tbody.appendChild(tr);
     });
