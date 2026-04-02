@@ -2,7 +2,6 @@
 Servidor web para el agente de verificación de reseñas de Google Maps.
 """
 
-import asyncio
 import json
 import os
 from typing import AsyncGenerator
@@ -13,7 +12,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 
 import sheets_handler
-from review_checker import check_reviews
+from review_checker import check_reviews_stream
 
 load_dotenv()
 
@@ -25,47 +24,37 @@ MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_CHECKS", "3"))
 DELAY = float(os.getenv("DELAY_BETWEEN_CHECKS", "2"))
 
 
-def sse_event(data: dict) -> str:
+def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 async def run_agent(sheet_url: str) -> AsyncGenerator[str, None]:
-    async def emit(event_type: str, **kwargs):
-        yield sse_event({"type": event_type, **kwargs})
-
-    async for chunk in emit("status", message="Conectando con Google Sheets..."):
-        yield chunk
+    yield sse({"type": "status", "message": "Conectando con Google Sheets..."})
 
     try:
         gc = sheets_handler.authenticate(CREDENTIALS_PATH)
         spreadsheet = sheets_handler.open_sheet(gc, sheet_url)
         worksheet = sheets_handler.get_worksheet(spreadsheet, None)
     except Exception as e:
-        async for chunk in emit("error", message=f"Error al conectar: {str(e)}"):
-            yield chunk
+        yield sse({"type": "error", "message": f"Error al conectar: {str(e)}"})
         return
 
-    async for chunk in emit("status", message=f'Conectado a "{spreadsheet.title}"'):
-        yield chunk
-    async for chunk in emit("status", message="Leyendo datos..."):
-        yield chunk
+    yield sse({"type": "status", "message": f'Conectado a "{spreadsheet.title}"'})
+    yield sse({"type": "status", "message": "Leyendo datos..."})
 
     try:
         rows = sheets_handler.read_all_rows(worksheet)
     except Exception as e:
-        async for chunk in emit("error", message=f"Error al leer la hoja: {str(e)}"):
-            yield chunk
+        yield sse({"type": "error", "message": f"Error al leer: {str(e)}"})
         return
 
     if not rows:
-        async for chunk in emit("error", message="La hoja está vacía."):
-            yield chunk
+        yield sse({"type": "error", "message": "La hoja está vacía."})
         return
 
     col_idx = sheets_handler.detect_url_column(rows)
     if col_idx is None:
-        async for chunk in emit("error", message="No se encontró ninguna columna con URLs de Google Maps."):
-            yield chunk
+        yield sse({"type": "error", "message": "No se encontró columna con URLs de Google Maps."})
         return
 
     headers = rows[0] if rows else []
@@ -73,96 +62,108 @@ async def run_agent(sheet_url: str) -> AsyncGenerator[str, None]:
     url_items = sheets_handler.extract_urls(rows, col_idx)
     total = len(url_items)
 
-    async for chunk in emit("status", message=f'Columna "{col_name}" — {total} reseñas encontradas'):
-        yield chunk
-    async for chunk in emit("total", total=total):
-        yield chunk
+    yield sse({"type": "status", "message": f'Columna "{col_name}" — {total} reseñas'})
+    yield sse({"type": "total", "total": total})
 
     if total == 0:
-        async for chunk in emit("error", message="No hay URLs para verificar."):
-            yield chunk
+        yield sse({"type": "error", "message": "No hay URLs para verificar."})
         return
 
-    async for chunk in emit("status", message=f"Verificando {total} reseñas..."):
-        yield chunk
+    yield sse({"type": "status", "message": f"Verificando {total} reseñas con Playwright..."})
 
     counters = {"activas": 0, "eliminadas": 0, "errores": 0}
-    progress_queue: asyncio.Queue = asyncio.Queue()
+    results = []
+    current = 0
 
-    def on_progress(current, total_, item):
-        status = item.get("status", "ERROR")
-        counters["activas" if status == "ACTIVA" else "eliminadas" if status == "ELIMINADA" else "errores"] += 1
-        progress_queue.put_nowait({"type": "progress", "current": current, "total": total_,
-            "status": status, "url": item.get("url", "")[:80], "detail": item.get("detail", ""),
-            **counters})
+    async for result in check_reviews_stream(url_items, MAX_CONCURRENT, DELAY):
+        current += 1
+        status = result.get("status", "ERROR")
+        if status == "ACTIVA":
+            counters["activas"] += 1
+        elif status == "ELIMINADA":
+            counters["eliminadas"] += 1
+        else:
+            counters["errores"] += 1
+        results.append(result)
 
-    agent_task = asyncio.create_task(check_reviews(url_items, MAX_CONCURRENT, DELAY, on_progress))
-    processed = 0
-    while processed < total:
-        try:
-            event = await asyncio.wait_for(progress_queue.get(), timeout=60.0)
-            yield sse_event(event)
-            processed += 1
-        except asyncio.TimeoutError:
-            break
+        yield sse({
+            "type": "progress",
+            "current": current,
+            "total": total,
+            "status": status,
+            "url": result.get("url", "")[:80],
+            "detail": result.get("detail", ""),
+            **counters,
+        })
 
-    results = await agent_task
-
-    async for chunk in emit("status", message=f'Escribiendo en pestaña "{RESULTS_TAB}"...'):
-        yield chunk
+    yield sse({"type": "status", "message": f'Escribiendo en "{RESULTS_TAB}"...'})
 
     try:
         results_ws = sheets_handler.get_or_create_results_tab(spreadsheet, RESULTS_TAB)
         sheets_handler.write_results(results_ws, results, source_headers=rows[0] if rows else None)
         sheets_handler.write_summary(results_ws, {"total": total, **counters}, start_row=total + 3)
     except Exception as e:
-        async for chunk in emit("error", message=f"Error al escribir: {str(e)}"):
-            yield chunk
+        yield sse({"type": "error", "message": f"Error al escribir: {str(e)}"})
         return
 
-    async for chunk in emit("done", total=total, **counters,
-        sheet_url=f"https://docs.google.com/spreadsheets/d/{spreadsheet.id}/edit",
-        results_tab=RESULTS_TAB):
-        yield chunk
+    yield sse({
+        "type": "done",
+        "total": total,
+        **counters,
+        "sheet_url": f"https://docs.google.com/spreadsheets/d/{spreadsheet.id}/edit",
+        "results_tab": RESULTS_TAB,
+    })
 
 
 async def run_direct(urls: list[str]) -> AsyncGenerator[str, None]:
-    async def emit(event_type: str, **kwargs):
-        yield sse_event({"type": event_type, **kwargs})
-
     url_items = [{"url": u.strip(), "row_data": [u.strip()]} for u in urls if u.strip()]
     total = len(url_items)
+
     if total == 0:
-        async for chunk in emit("error", message="No hay URLs para verificar."): yield chunk
+        yield sse({"type": "error", "message": "No hay URLs para verificar."})
         return
 
-    async for chunk in emit("total", total=total): yield chunk
-    async for chunk in emit("status", message=f"Verificando {total} URLs..."): yield chunk
+    yield sse({"type": "total", "total": total})
+    yield sse({"type": "status", "message": f"Iniciando verificación de {total} URLs..."})
 
     counters = {"activas": 0, "eliminadas": 0, "errores": 0}
-    progress_queue: asyncio.Queue = asyncio.Queue()
+    results = []
+    current = 0
 
-    def on_progress(current, total_, item):
-        status = item.get("status", "ERROR")
-        counters["activas" if status == "ACTIVA" else "eliminadas" if status == "ELIMINADA" else "errores"] += 1
-        progress_queue.put_nowait({"type": "progress", "current": current, "total": total_,
-            "status": status, "url": item.get("url", "")[:80], "detail": item.get("detail", ""),
-            **counters})
+    async for result in check_reviews_stream(url_items, MAX_CONCURRENT, DELAY):
+        current += 1
+        status = result.get("status", "ERROR")
+        if status == "ACTIVA":
+            counters["activas"] += 1
+        elif status == "ELIMINADA":
+            counters["eliminadas"] += 1
+        else:
+            counters["errores"] += 1
+        results.append(result)
 
-    agent_task = asyncio.create_task(check_reviews(url_items, MAX_CONCURRENT, DELAY, on_progress))
-    processed = 0
-    while processed < total:
-        try:
-            event = await asyncio.wait_for(progress_queue.get(), timeout=60.0)
-            yield sse_event(event)
-            processed += 1
-        except asyncio.TimeoutError:
-            break
+        yield sse({
+            "type": "progress",
+            "current": current,
+            "total": total,
+            "status": status,
+            "url": result.get("url", "")[:80],
+            "detail": result.get("detail", ""),
+            **counters,
+        })
 
-    results = await agent_task
-    rows_output = [{"url": r.get("url",""), "status": r.get("status","ERROR"), "detail": r.get("detail","")} for r in results if r]
-    async for chunk in emit("done", total=total, **counters, sheet_url=None, results_tab=None, rows=rows_output):
-        yield chunk
+    rows_output = [
+        {"url": r.get("url", ""), "status": r.get("status", "ERROR"), "detail": r.get("detail", "")}
+        for r in results if r
+    ]
+
+    yield sse({
+        "type": "done",
+        "total": total,
+        **counters,
+        "sheet_url": None,
+        "results_tab": None,
+        "rows": rows_output,
+    })
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -179,8 +180,11 @@ async def health():
 
 @app.get("/check")
 async def check(sheet_url: str, request: Request):
-    return StreamingResponse(run_agent(sheet_url), media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return StreamingResponse(
+        run_agent(sheet_url),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 class DirectCheckRequest(BaseModel):
@@ -188,9 +192,12 @@ class DirectCheckRequest(BaseModel):
 
 
 @app.post("/check-direct")
-async def check_direct(body: DirectCheckRequest, request: Request):
-    return StreamingResponse(run_direct(body.urls), media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+async def check_direct(body: DirectCheckRequest):
+    return StreamingResponse(
+        run_direct(body.urls),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 if __name__ == "__main__":
