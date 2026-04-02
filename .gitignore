@@ -1,0 +1,26 @@
+# Credenciales - NUNCA subir a git
+credentials.json
+*.json
+!package.json
+
+# Variables de entorno
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Playwright
+/playwright-report/
+/test-results/
+
+# OS
+.DS_Store
+Thumbs.db
