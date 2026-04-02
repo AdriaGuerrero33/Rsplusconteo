@@ -5,16 +5,18 @@ echo ============================================
 echo.
 
 echo [1/3] Instalando librerias Python...
-pip install gspread google-auth playwright fastapi uvicorn python-dotenv asyncio-throttle
+py -m pip install gspread google-auth playwright fastapi uvicorn python-dotenv asyncio-throttle
 if errorlevel 1 (
-    echo ERROR: Fallo al instalar librerias. Asegurate de tener Python instalado.
+    echo.
+    echo ERROR: Fallo al instalar librerias.
+    echo Asegurate de tener Python instalado desde python.org
     pause
     exit /b 1
 )
 
 echo.
-echo [2/3] Instalando navegador Chromium para Playwright...
-playwright install chromium
+echo [2/3] Instalando navegador Chromium...
+py -m playwright install chromium
 if errorlevel 1 (
     echo ERROR: Fallo al instalar Chromium.
     pause
@@ -25,7 +27,6 @@ echo.
 echo [3/3] Copiando configuracion...
 if not exist .env (
     copy .env.example .env
-    echo Archivo .env creado. Puedes editarlo si necesitas cambiar opciones.
 )
 
 echo.
