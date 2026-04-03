@@ -47,18 +47,27 @@ DELETED_PHRASES: list[tuple[str, str]] = [
 ]
 
 STAR_RE = re.compile(r"\b[1-5][,.]?\d?\s*(estrellas?|stars?)\b", re.IGNORECASE)
-# Puntuación numérica: "4/5", "5.0", "rating":5  (señal fuerte de reseña activa)
-RATING_RE = re.compile(r'(?:"ratingValue"|"reviewRating"|starRating)[^0-9]*([1-5](?:[.,]\d)?)', re.IGNORECASE)
+# Solo enteros exactos 1-5 — los ratings agregados del negocio son decimales (4.2, 3.7…)
+RATING_RE = re.compile(r'"ratingValue"\s*:\s*"?([1-5])"?(?!\d|[,.])', re.IGNORECASE)
 
 # ─── Extracción de texto desde HTML ───────────────────────────────────────────
 
 def _ld_review_body(obj) -> str:
+    """
+    Extrae texto SOLO de objetos JSON-LD @type='Review'.
+    Evita coger la descripción del negocio (LocalBusiness, Restaurant, etc.)
+    """
     if isinstance(obj, dict):
-        for k in ("reviewBody", "description", "text"):
-            v = obj.get(k, "")
-            if isinstance(v, str) and len(v) > 1:
-                return v
-        for v in obj.values():
+        obj_type = str(obj.get("@type", ""))
+        if "Review" in obj_type:
+            for k in ("reviewBody", "text", "description"):
+                v = obj.get(k, "")
+                if isinstance(v, str) and len(v) > 1:
+                    return v
+        # Recursión, saltando claves que pertenecen al negocio, no a la reseña
+        for k, v in obj.items():
+            if k in ("aggregateRating", "address", "geo", "openingHours", "image"):
+                continue
             r = _ld_review_body(v)
             if r:
                 return r
@@ -71,18 +80,29 @@ def _ld_review_body(obj) -> str:
 
 
 def _ld_rating(obj) -> int:
-    """Extrae ratingValue numérico (1-5) de JSON-LD recursivamente."""
+    """
+    Extrae rating SOLO de objetos @type='Review'.
+    Ignora aggregateRating (rating general del negocio).
+    Solo acepta enteros exactos (5, no 4.2).
+    """
     if isinstance(obj, dict):
-        for k in ("ratingValue", "starRating"):
-            v = obj.get(k)
-            if v is not None:
-                try:
-                    n = int(float(str(v)))
-                    if 1 <= n <= 5:
-                        return n
-                except (ValueError, TypeError):
-                    pass
-        for v in obj.values():
+        obj_type = str(obj.get("@type", ""))
+        if "Review" in obj_type:
+            for source in [obj.get("reviewRating", {}), obj]:
+                if not isinstance(source, dict):
+                    continue
+                v = source.get("ratingValue")
+                if v is not None:
+                    try:
+                        fv = float(str(v))
+                        n  = int(fv)
+                        if 1 <= n <= 5 and fv == n:  # entero exacto
+                            return n
+                    except (ValueError, TypeError):
+                        pass
+        for k, v in obj.items():
+            if k in ("aggregateRating", "address", "geo"):
+                continue
             r = _ld_rating(v)
             if r:
                 return r
@@ -125,7 +145,7 @@ def _extract_rating(html: str) -> int:
 
 
 def _extract_review_text(html: str) -> str:
-    # 1. JSON-LD
+    # 1. JSON-LD — único origen fiable: solo @type:Review tiene reviewBody real
     for ld_raw in re.findall(
         r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
         html, re.DOTALL | re.IGNORECASE,
@@ -137,33 +157,7 @@ def _extract_review_text(html: str) -> str:
         except Exception:
             pass
 
-    # 2. Meta description — Google a veces pone el texto de reseña aquí
-    for pattern in [
-        r'<meta\s+name=["\']description["\'][^>]+content=["\']([^"\']{5,})["\']',
-        r'<meta\s+content=["\']([^"\']{5,})["\'][^>]+name=["\']description["\']',
-        r'<meta\s+property=["\']og:description["\'][^>]+content=["\']([^"\']{5,})["\']',
-    ]:
-        m = re.search(pattern, html, re.IGNORECASE)
-        if m:
-            desc = m.group(1).strip()
-            # Descartar descripciones genéricas del sitio, no de reseña
-            if any(p in desc.lower() for p in [
-                "google maps", "cómo llegar", "how to get", "street view",
-                "find local businesses", "maps.google", "ver el mapa",
-            ]):
-                continue
-            # Limpiar prefijo de puntuación: "4/5 estrellas · " o "5 stars - "
-            desc = re.sub(
-                r'^[\d/,.]+ ?(estrellas?|stars?|de \d)[^·\-–—]*[·\-–—]\s*',
-                '', desc, flags=re.IGNORECASE
-            ).strip()
-            if not desc:
-                continue
-            letters = sum(1 for c in desc if c.isalpha())
-            if letters / max(len(desc), 1) >= 0.50:
-                return desc[:350]
-
-    # 3. Strings JS embebidos (umbrales relajados para reseñas cortas)
+    # 2. Strings JS embebidos (fallback para cuando no hay JSON-LD de reseña)
     seen: set[str] = set()
     # Patrón de nombre de negocio: "TEXTO EN MAYÚS - Categoría" o "Nombre - Categoría"
     _biz_name_re = re.compile(r'^[A-ZÁÉÍÓÚÑ][^a-záéíóúñ]{2,}\s*[-–—]\s*\w', re.UNICODE)
