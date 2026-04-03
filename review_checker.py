@@ -46,7 +46,9 @@ DELETED_PHRASES: list[tuple[str, str]] = [
     ("diese rezension ist nicht", "DE: rezension nicht"),
 ]
 
-STAR_RE = re.compile(r"\b\d[,.]?\d?\s*(estrellas?|stars?)\b", re.IGNORECASE)
+STAR_RE = re.compile(r"\b[1-5][,.]?\d?\s*(estrellas?|stars?)\b", re.IGNORECASE)
+# Puntuación numérica: "4/5", "5.0", "rating":5  (señal fuerte de reseña activa)
+RATING_RE = re.compile(r'(?:"ratingValue"|"reviewRating"|starRating)[^0-9]*([1-5](?:[.,]\d)?)', re.IGNORECASE)
 
 # ─── Extracción de texto desde HTML ───────────────────────────────────────────
 
@@ -54,7 +56,7 @@ def _ld_review_body(obj) -> str:
     if isinstance(obj, dict):
         for k in ("reviewBody", "description", "text"):
             v = obj.get(k, "")
-            if isinstance(v, str) and len(v) > 15:
+            if isinstance(v, str) and len(v) > 1:   # reseñas de 1 sola palabra
                 return v
         for v in obj.values():
             r = _ld_review_body(v)
@@ -81,40 +83,49 @@ def _extract_review_text(html: str) -> str:
         except Exception:
             pass
 
-    # 2. Meta description
+    # 2. Meta description — Google a veces pone el texto de reseña aquí
     for pattern in [
-        r'<meta\s+name=["\']description["\'][^>]+content=["\']([^"\']{30,})["\']',
-        r'<meta\s+content=["\']([^"\']{30,})["\'][^>]+name=["\']description["\']',
-        r'<meta\s+property=["\']og:description["\'][^>]+content=["\']([^"\']{30,})["\']',
+        r'<meta\s+name=["\']description["\'][^>]+content=["\']([^"\']{5,})["\']',
+        r'<meta\s+content=["\']([^"\']{5,})["\'][^>]+name=["\']description["\']',
+        r'<meta\s+property=["\']og:description["\'][^>]+content=["\']([^"\']{5,})["\']',
     ]:
         m = re.search(pattern, html, re.IGNORECASE)
         if m:
             desc = m.group(1).strip()
+            # Descartar descripciones genéricas del sitio, no de reseña
             if any(p in desc.lower() for p in [
                 "google maps", "cómo llegar", "how to get", "street view",
-                "reviews for", "opiniones de", "find local businesses", "maps.google",
+                "find local businesses", "maps.google", "ver el mapa",
             ]):
                 continue
+            # Limpiar prefijo de puntuación: "4/5 estrellas · " o "5 stars - "
+            desc = re.sub(
+                r'^[\d/,.]+ ?(estrellas?|stars?|de \d)[^·\-–—]*[·\-–—]\s*',
+                '', desc, flags=re.IGNORECASE
+            ).strip()
+            if not desc:
+                continue
             letters = sum(1 for c in desc if c.isalpha())
-            if letters / max(len(desc), 1) >= 0.60:
+            if letters / max(len(desc), 1) >= 0.50:
                 return desc[:350]
 
-    # 3. Strings JS embebidos — requiere alto ratio de letras (filtra SVG, coordenadas)
+    # 3. Strings JS embebidos (umbrales relajados para reseñas cortas)
     seen: set[str] = set()
-    for raw in re.findall(r'"([^"\\]{50,400})"', html):
+    for raw in re.findall(r'"([^"\\]{10,400})"', html):
         text = raw.replace("\\n", " ").replace("\\t", " ").strip()
         if text in seen:
             continue
         seen.add(text)
-        if text.startswith(("http", "/", "{", "M", "m")):
+        if text.startswith(("http", "/", "{", "M", "m", "data:", "function")):
             continue
-        if any(c in text for c in ("<", ">", "\\", "=", ";", "{", "}", "%", "@")):
+        if any(c in text for c in ("<", ">", "\\", "=", ";", "{", "}", "%", "@", ".")):
             continue
         letters = sum(1 for c in text if c.isalpha())
-        if letters / max(len(text), 1) < 0.65:
+        if letters / max(len(text), 1) < 0.70:
             continue
         words = text.split()
-        if len(words) >= 8 and all(len(w) <= 20 for w in words):
+        # Mínimo 2 palabras (cubre reseñas muy cortas tipo "Muy bueno")
+        if len(words) >= 2 and all(len(w) <= 25 for w in words):
             return text[:350]
 
     return ""
@@ -322,6 +333,11 @@ async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
             if rev:
                 return {"status": "ACTIVA", "detail": "Texto en HTML",
                         "evidence": [f'"{rev[:100]}"'], "review_text": rev, "final_url": final_url}
+            # Puntuación numérica en JSON-LD (señal fuerte: la reseña existe aunque sea sin texto)
+            rating_m = RATING_RE.search(html)
+            if rating_m:
+                return {"status": "ACTIVA", "detail": f"Puntuación {rating_m.group(1)}/5 en HTML",
+                        "evidence": [f"rating={rating_m.group(1)}"], "review_text": "", "final_url": final_url}
             star_m = STAR_RE.search(html_lower)
             if star_m:
                 return {"status": "ACTIVA", "detail": f"Estrellas: '{star_m.group()}'",
