@@ -153,7 +153,7 @@
   <div class="card results-table-wrap" id="results-table-wrap">
     <h3>Resultados detallados</h3>
     <table>
-      <thead><tr><th>#</th><th>URL</th><th>Estado</th><th>Texto de reseña</th><th>Motivo</th></tr></thead>
+      <thead><tr><th>#</th><th>URL</th><th>Estado</th><th>⭐ Estrellas</th><th>Texto de reseña</th><th>Motivo</th></tr></thead>
       <tbody id="results-tbody"></tbody>
     </table>
   </div>
@@ -355,10 +355,17 @@
         : `<span style="color:#9ca3af;font-style:italic">${row.status==="ELIMINADA"?"—":"sin texto"}</span>`;
       const ev = row.evidence && row.evidence.length
         ? `<div class="evidence-list">${escapeHtml(row.evidence.join(" | "))}</div>` : "";
+      // Estrellas
+      const r = row.rating || 0;
+      const starsHtml = r
+        ? `<span style="font-size:14px">${"⭐".repeat(r)}</span>`
+          + (r < 5 ? `<span style="color:#d97706;font-size:11px;font-weight:600;margin-left:4px">⚠ ${r}/5</span>` : `<span style="color:#059669;font-size:11px;margin-left:4px">${r}/5</span>`)
+        : `<span style="color:#9ca3af;font-size:11px">—</span>`;
       tr.innerHTML =
         `<td>${i+1}</td>`+
         `<td><a href="${escapeHtml(row.url)}" target="_blank" style="color:#4f46e5">${escapeHtml(row.url)}</a></td>`+
         `<td><span class="badge ${row.status}">${row.status}</span></td>`+
+        `<td style="white-space:nowrap">${starsHtml}</td>`+
         `<td style="max-width:220px;font-size:12px">${reviewHtml}</td>`+
         `<td>${escapeHtml(row.detail||"")}${ev}</td>`;
       tbody.appendChild(tr);

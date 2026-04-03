@@ -117,6 +117,7 @@ async def _run_sheets_job(job_id: str, sheet_url: str) -> None:
                 "detail":      result.get("detail", ""),
                 "evidence":    result.get("evidence", []),
                 "review_text": result.get("review_text", ""),
+                "rating":      result.get("rating", 0),
             })
 
         job.log.append(f'Escribiendo en "{RESULTS_TAB}"...')
@@ -153,6 +154,7 @@ async def _run_direct_job(job_id: str, urls: list[str]) -> None:
                 "detail":      result.get("detail", ""),
                 "evidence":    result.get("evidence", []),
                 "review_text": result.get("review_text", ""),
+                "rating":      result.get("rating", 0),
             })
 
         _mark_duplicates(job)

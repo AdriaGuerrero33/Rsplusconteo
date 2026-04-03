@@ -56,7 +56,7 @@ def _ld_review_body(obj) -> str:
     if isinstance(obj, dict):
         for k in ("reviewBody", "description", "text"):
             v = obj.get(k, "")
-            if isinstance(v, str) and len(v) > 1:   # reseñas de 1 sola palabra
+            if isinstance(v, str) and len(v) > 1:
                 return v
         for v in obj.values():
             r = _ld_review_body(v)
@@ -68,6 +68,60 @@ def _ld_review_body(obj) -> str:
             if r:
                 return r
     return ""
+
+
+def _ld_rating(obj) -> int:
+    """Extrae ratingValue numérico (1-5) de JSON-LD recursivamente."""
+    if isinstance(obj, dict):
+        for k in ("ratingValue", "starRating"):
+            v = obj.get(k)
+            if v is not None:
+                try:
+                    n = int(float(str(v)))
+                    if 1 <= n <= 5:
+                        return n
+                except (ValueError, TypeError):
+                    pass
+        for v in obj.values():
+            r = _ld_rating(v)
+            if r:
+                return r
+    elif isinstance(obj, list):
+        for item in obj:
+            r = _ld_rating(item)
+            if r:
+                return r
+    return 0
+
+
+def _extract_rating(html: str) -> int:
+    """
+    Extrae la puntuación de la reseña (1-5 estrellas).
+    Devuelve 0 si no se encuentra.
+    """
+    # 1. JSON-LD
+    for ld_raw in re.findall(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html, re.DOTALL | re.IGNORECASE,
+    ):
+        try:
+            rating = _ld_rating(_json.loads(ld_raw.strip()))
+            if rating:
+                return rating
+        except Exception:
+            pass
+
+    # 2. Patrón directo en HTML ("ratingValue":4, starRating:5, etc.)
+    m = RATING_RE.search(html)
+    if m:
+        try:
+            n = int(float(m.group(1).replace(",", ".")))
+            if 1 <= n <= 5:
+                return n
+        except (ValueError, TypeError):
+            pass
+
+    return 0
 
 
 def _extract_review_text(html: str) -> str:
@@ -328,20 +382,19 @@ async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
             for phrase, label in DELETED_PHRASES:
                 if phrase in html_lower:
                     return {"status": "ELIMINADA", "detail": label,
-                            "evidence": [f"'{phrase}'"], "review_text": "", "final_url": final_url}
+                            "evidence": [f"'{phrase}'"], "review_text": "", "rating": 0, "final_url": final_url}
+            rating = _extract_rating(html)
             rev = _extract_review_text(html)
             if rev:
                 return {"status": "ACTIVA", "detail": "Texto en HTML",
-                        "evidence": [f'"{rev[:100]}"'], "review_text": rev, "final_url": final_url}
-            # Puntuación numérica en JSON-LD (señal fuerte: la reseña existe aunque sea sin texto)
-            rating_m = RATING_RE.search(html)
-            if rating_m:
-                return {"status": "ACTIVA", "detail": f"Puntuación {rating_m.group(1)}/5 en HTML",
-                        "evidence": [f"rating={rating_m.group(1)}"], "review_text": "", "final_url": final_url}
+                        "evidence": [f'"{rev[:100]}"'], "review_text": rev, "rating": rating, "final_url": final_url}
+            if rating:
+                return {"status": "ACTIVA", "detail": f"Puntuación {rating}/5 detectada",
+                        "evidence": [f"rating={rating}"], "review_text": "", "rating": rating, "final_url": final_url}
             star_m = STAR_RE.search(html_lower)
             if star_m:
                 return {"status": "ACTIVA", "detail": f"Estrellas: '{star_m.group()}'",
-                        "evidence": [f"'{star_m.group()}'"], "review_text": "", "final_url": final_url}
+                        "evidence": [f"'{star_m.group()}'"], "review_text": "", "rating": 0, "final_url": final_url}
 
         # ── Capa 2: Jina.ai ───────────────────────────────────────────────────
         print(f"[check] Capa 1 sin señal → Jina.ai", flush=True)
