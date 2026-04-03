@@ -37,7 +37,7 @@ DELAY            = float(os.getenv("DELAY_BETWEEN_CHECKS", "1.5"))
 class JobState:
     total:       int       = 0
     results:     list      = field(default_factory=list)
-    counters:    dict      = field(default_factory=lambda: {"activas": 0, "eliminadas": 0, "inciertas": 0})
+    counters:    dict      = field(default_factory=lambda: {"activas": 0, "eliminadas": 0, "inciertas": 0, "duplicadas": 0})
     done:        bool      = False
     error:       str|None  = None
     sheet_url:   str|None  = None
@@ -48,9 +48,38 @@ _jobs: dict[str, JobState] = {}
 
 
 def _count(counters: dict, status: str) -> None:
-    if   status == "ACTIVA":    counters["activas"]    += 1
-    elif status == "ELIMINADA": counters["eliminadas"] += 1
-    else:                       counters["inciertas"]  += 1
+    if   status == "ACTIVA":     counters["activas"]    += 1
+    elif status == "ELIMINADA":  counters["eliminadas"] += 1
+    elif status == "DUPLICADA":  counters["duplicadas"] += 1
+    else:                        counters["inciertas"]  += 1
+
+
+def _mark_duplicates(job: "JobState") -> None:
+    """
+    Tras completar la verificación, detecta textos de reseña repetidos.
+    Si dos o más reseñas comparten el mismo texto, todas se marcan DUPLICADA.
+    """
+    from collections import defaultdict
+    groups: dict[str, list[int]] = defaultdict(list)
+    for i, r in enumerate(job.results):
+        text = (r.get("review_text") or "").strip()
+        if text:
+            groups[text].append(i)
+
+    for text, indices in groups.items():
+        if len(indices) < 2:
+            continue
+        for i in indices:
+            old_status = job.results[i]["status"]
+            if old_status == "ACTIVA":
+                job.counters["activas"] -= 1
+            # Marcar como duplicada
+            job.results[i]["status"] = "DUPLICADA"
+            job.results[i]["detail"] = (
+                f"Texto idéntico a reseñas: "
+                + ", ".join(f"#{j+1}" for j in indices if j != i)
+            )
+            job.counters["duplicadas"] += 1
 
 
 # ── Trabajos en background ────────────────────────────────────────────────────
@@ -98,6 +127,7 @@ async def _run_sheets_job(job_id: str, sheet_url: str) -> None:
         sheets_handler.write_summary(ws_out,
             {"total": job.total, **job.counters}, start_row=job.total + 3)
 
+        _mark_duplicates(job)
         job.sheet_url   = f"https://docs.google.com/spreadsheets/d/{spreadsheet.id}/edit"
         job.results_tab = RESULTS_TAB
         job.done        = True
@@ -125,6 +155,7 @@ async def _run_direct_job(job_id: str, urls: list[str]) -> None:
                 "review_text": result.get("review_text", ""),
             })
 
+        _mark_duplicates(job)
         job.done = True
 
     except Exception as exc:
