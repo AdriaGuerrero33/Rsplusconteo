@@ -25,25 +25,29 @@
     .btn-check { padding: 12px 24px; background: #4f46e5; color: white; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.2s, opacity 0.2s; white-space: nowrap; }
     .btn-check:hover { background: #4338ca; }
     .btn-check:disabled { opacity: 0.5; cursor: not-allowed; }
-    .counters { display: grid; grid-template-columns: repeat(5,1fr); gap: 12px; margin-bottom: 24px; }
+    .counters { display: grid; grid-template-columns: repeat(6,1fr); gap: 12px; margin-bottom: 24px; }
     .counter-box { border-radius: 12px; padding: 16px; text-align: center; }
     .counter-box.total     { background: #f3f4f6; }
     .counter-box.active    { background: #ecfdf5; }
     .counter-box.deleted   { background: #fef2f2; }
     .counter-box.uncertain { background: #fff7ed; }
     .counter-box.duplicate { background: #f5f3ff; }
+    .counter-box.wrong     { background: #fff1f2; }
     .counter-num { font-size: 32px; font-weight: 800; line-height: 1; margin-bottom: 4px; }
     .counter-box.total     .counter-num { color: #374151; }
     .counter-box.active    .counter-num { color: #059669; }
     .counter-box.deleted   .counter-num { color: #dc2626; }
     .counter-box.uncertain .counter-num { color: #d97706; }
     .counter-box.duplicate .counter-num { color: #7c3aed; }
+    .counter-box.wrong     .counter-num { color: #be123c; }
     .counter-label { font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
     .counter-box.total     .counter-label { color: #6b7280; }
     .counter-box.active    .counter-label { color: #065f46; }
     .counter-box.deleted   .counter-label { color: #991b1b; }
     .counter-box.uncertain .counter-label { color: #92400e; }
     .counter-box.duplicate .counter-label { color: #5b21b6; }
+    .counter-box.wrong     .counter-label { color: #9f1239; }
+    @media(max-width:700px){ .counters{grid-template-columns:repeat(3,1fr)} }
     .progress-section { display: none; }
     .progress-section.visible { display: block; }
     .progress-bar-track { background: #e5e7eb; border-radius: 999px; height: 8px; overflow: hidden; margin-bottom: 8px; }
@@ -84,7 +88,9 @@
     .badge.ELIMINADA  { background:#fee2e2; color:#991b1b; }
     .badge.INCIERTA   { background:#ffedd5; color:#9a3412; }
     .badge.DUPLICADA  { background:#ede9fe; color:#5b21b6; }
+    .badge.ERRONEA    { background:#ffe4e6; color:#9f1239; }
     .log-line.duplicada .log-text { color:#a78bfa; }
+    .log-line.erronea   .log-text { color:#fb7185; }
     .evidence-list { font-size:11px; color:#9ca3af; margin-top:2px; }
     @media(max-width:560px){ .counters{grid-template-columns:repeat(2,1fr)} .input-row{flex-direction:column} }
   </style>
@@ -132,6 +138,10 @@
       <div class="counter-box duplicate">
         <div class="counter-num" id="cnt-duplicadas">—</div>
         <div class="counter-label">Duplicadas</div>
+      </div>
+      <div class="counter-box wrong">
+        <div class="counter-num" id="cnt-erroneas">—</div>
+        <div class="counter-label">Erróneas</div>
       </div>
     </div>
     <div class="progress-section" id="progress-section">
@@ -211,6 +221,7 @@
       document.getElementById("cnt-eliminadas").textContent = "0";
       document.getElementById("cnt-inciertas").textContent  = "0";
       document.getElementById("cnt-duplicadas").textContent = "0";
+      document.getElementById("cnt-erroneas").textContent   = "0";
       poll(job_id, 0, "direct");
     } catch(err) {
       addLog("incierta","⚠","Error al iniciar: "+err.message);
@@ -257,6 +268,7 @@
         document.getElementById("cnt-eliminadas").textContent = data.counters.eliminadas;
         document.getElementById("cnt-inciertas").textContent  = data.counters.inciertas;
         document.getElementById("cnt-duplicadas").textContent = data.counters.duplicadas || 0;
+        document.getElementById("cnt-erroneas").textContent   = data.counters.erroneas   || 0;
         updateProgress(current, total);
 
         // Log de cada resultado nuevo
@@ -393,7 +405,7 @@
     _stopPoll();
     _allResults = [];
     _lastLogLen = 0;
-    ["cnt-total","cnt-activas","cnt-eliminadas","cnt-inciertas","cnt-duplicadas"].forEach(id =>
+    ["cnt-total","cnt-activas","cnt-eliminadas","cnt-inciertas","cnt-duplicadas","cnt-erroneas"].forEach(id =>
       document.getElementById(id).textContent = "—");
     document.getElementById("log-box").innerHTML = "";
     const bar = document.getElementById("progress-bar");

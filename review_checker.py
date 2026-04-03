@@ -385,12 +385,15 @@ async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
                             "evidence": [f"'{phrase}'"], "review_text": "", "rating": 0, "final_url": final_url}
             rating = _extract_rating(html)
             rev = _extract_review_text(html)
-            if rev:
-                return {"status": "ACTIVA", "detail": "Texto en HTML",
-                        "evidence": [f'"{rev[:100]}"'], "review_text": rev, "rating": rating, "final_url": final_url}
-            if rating:
-                return {"status": "ACTIVA", "detail": f"Puntuación {rating}/5 detectada",
-                        "evidence": [f"rating={rating}"], "review_text": "", "rating": rating, "final_url": final_url}
+            if rev or rating:
+                status = "ACTIVA" if rating == 5 or (rating == 0 and rev) else "ERRONEA"
+                detail = (
+                    f"Reseña de {rating}/5 — solo se validan 5 estrellas" if 0 < rating < 5
+                    else ("Texto en HTML" if rev else f"Puntuación {rating}/5 detectada")
+                )
+                return {"status": status, "detail": detail,
+                        "evidence": [f'"{rev[:100]}"'] if rev else [f"rating={rating}"],
+                        "review_text": rev, "rating": rating, "final_url": final_url}
             star_m = STAR_RE.search(html_lower)
             if star_m:
                 return {"status": "ACTIVA", "detail": f"Estrellas: '{star_m.group()}'",

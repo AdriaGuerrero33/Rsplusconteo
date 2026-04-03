@@ -37,7 +37,7 @@ DELAY            = float(os.getenv("DELAY_BETWEEN_CHECKS", "1.5"))
 class JobState:
     total:       int       = 0
     results:     list      = field(default_factory=list)
-    counters:    dict      = field(default_factory=lambda: {"activas": 0, "eliminadas": 0, "inciertas": 0, "duplicadas": 0})
+    counters:    dict      = field(default_factory=lambda: {"activas": 0, "eliminadas": 0, "inciertas": 0, "duplicadas": 0, "erroneas": 0})
     done:        bool      = False
     error:       str|None  = None
     sheet_url:   str|None  = None
@@ -51,6 +51,7 @@ def _count(counters: dict, status: str) -> None:
     if   status == "ACTIVA":     counters["activas"]    += 1
     elif status == "ELIMINADA":  counters["eliminadas"] += 1
     elif status == "DUPLICADA":  counters["duplicadas"] += 1
+    elif status == "ERRONEA":    counters["erroneas"]   += 1
     else:                        counters["inciertas"]  += 1
 
 
