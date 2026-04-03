@@ -165,6 +165,8 @@ def _extract_review_text(html: str) -> str:
 
     # 3. Strings JS embebidos (umbrales relajados para reseñas cortas)
     seen: set[str] = set()
+    # Patrón de nombre de negocio: "TEXTO EN MAYÚS - Categoría" o "Nombre - Categoría"
+    _biz_name_re = re.compile(r'^[A-ZÁÉÍÓÚÑ][^a-záéíóúñ]{2,}\s*[-–—]\s*\w', re.UNICODE)
     for raw in re.findall(r'"([^"\\]{10,400})"', html):
         text = raw.replace("\\n", " ").replace("\\t", " ").strip()
         if text in seen:
@@ -173,6 +175,9 @@ def _extract_review_text(html: str) -> str:
         if text.startswith(("http", "/", "{", "M", "m", "data:", "function")):
             continue
         if any(c in text for c in ("<", ">", "\\", "=", ";", "{", "}", "%", "@", ".")):
+            continue
+        # Filtrar nombres de negocio tipo "EMPRESA - Categoría de servicio"
+        if _biz_name_re.match(text):
             continue
         letters = sum(1 for c in text if c.isalpha())
         if letters / max(len(text), 1) < 0.70:

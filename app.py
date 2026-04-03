@@ -59,13 +59,19 @@ def _mark_duplicates(job: "JobState") -> None:
     """
     Tras completar la verificación, detecta textos de reseña repetidos.
     Si dos o más reseñas comparten el mismo texto, todas se marcan DUPLICADA.
+    Solo se comparan textos con ≥6 palabras para evitar falsos positivos
+    con nombres de negocio o frases genéricas muy cortas.
     """
+    import re as _re
     from collections import defaultdict
+    _biz = _re.compile(r'^[A-ZÁÉÍÓÚÑ][^a-záéíóúñ]{2,}\s*[-–—]', _re.UNICODE)
     groups: dict[str, list[int]] = defaultdict(list)
     for i, r in enumerate(job.results):
         text = (r.get("review_text") or "").strip()
-        if text:
-            groups[text].append(i)
+        # Ignorar textos cortos o que parezcan nombres de negocio
+        if not text or len(text.split()) < 6 or _biz.match(text):
+            continue
+        groups[text].append(i)
 
     for text, indices in groups.items():
         if len(indices) < 2:
