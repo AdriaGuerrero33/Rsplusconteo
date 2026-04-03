@@ -263,10 +263,13 @@ async def _check_via_vision(url: str) -> dict | None:
                             "This is a screenshot of a Google Maps review URL.\n"
                             "Determine the status and extract review text if visible.\n\n"
                             "Rules:\n"
-                            "- ACTIVA: visible review text written by a user\n"
-                            "- ELIMINADA: 'no longer available', error page, consent page, "
-                            "or generic Maps page with NO review text\n"
-                            "- INCIERTA: cannot determine clearly\n\n"
+                            "- ACTIVA: visible review text written by a user (the actual review content)\n"
+                            "- ELIMINADA: page explicitly says 'no longer available', "
+                            "'review not found', or similar deletion message\n"
+                            "- INCIERTA: consent/cookie page, generic Google Maps page, "
+                            "error page, or cannot clearly determine\n\n"
+                            "IMPORTANT: If you see a cookie consent form or GDPR page, "
+                            "classify as INCIERTA (not ELIMINADA).\n\n"
                             "Respond ONLY with valid JSON:\n"
                             '{"status":"ACTIVA|ELIMINADA|INCIERTA","review_text":"...","reason":"..."}'
                         ),
