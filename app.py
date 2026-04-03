@@ -127,7 +127,12 @@ async def _run_sheets_job(job_id: str, sheet_url: str) -> None:
                 "rating":      result.get("rating", 0),
             })
 
-        job.log.append(f'Escribiendo en "{RESULTS_TAB}"...')
+        # Escribir SI/NO en la hoja original (al lado de cada URL)
+        job.log.append("Escribiendo SI/NO en la hoja original...")
+        sheets_handler.write_si_no_to_source(worksheet, url_items, job.results)
+
+        # También escribir resultados completos en la pestaña de resultados
+        job.log.append(f'Escribiendo resumen en "{RESULTS_TAB}"...')
         ws_out = sheets_handler.get_or_create_results_tab(spreadsheet, RESULTS_TAB)
         sheets_handler.write_results(ws_out,
             [{**r, "row_data": [r["url"]]} for r in job.results],

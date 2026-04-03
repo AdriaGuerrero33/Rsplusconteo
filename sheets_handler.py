@@ -80,7 +80,7 @@ def extract_urls(rows: list[list[str]], col_idx: int) -> list[dict]:
         if row_idx == 0 and not GOOGLE_MAPS_URL_PATTERN.search(cell_value):
             continue
         if GOOGLE_MAPS_URL_PATTERN.search(cell_value):
-            results.append({"row": row_idx + 1, "url": cell_value, "row_data": row})
+            results.append({"row": row_idx + 1, "col": col_idx, "url": cell_value, "row_data": row})
     return results
 
 
@@ -107,6 +107,57 @@ def write_results(worksheet: gspread.Worksheet, results: list[dict], source_head
         worksheet.format("1:1", {"textFormat": {"bold": True}})
     except Exception:
         pass
+
+
+def write_si_no_to_source(
+    worksheet: gspread.Worksheet,
+    url_items: list[dict],
+    results: list[dict],
+) -> None:
+    """
+    Escribe SI/NO directamente en la hoja original, en la columna
+    inmediatamente a la derecha de la URL.
+      ACTIVA   → SI  (verde)
+      cualquier otro estado → NO  (rojo)
+    """
+    import gspread.utils as gu
+
+    updates = []
+    fmt_green = {"backgroundColor": {"red": 0.85, "green": 0.97, "blue": 0.87},
+                 "textFormat": {"bold": True, "foregroundColor": {"red": 0.02, "green": 0.37, "blue": 0.27}}}
+    fmt_red   = {"backgroundColor": {"red": 1.0,  "green": 0.89, "blue": 0.89},
+                 "textFormat": {"bold": True, "foregroundColor": {"red": 0.60, "green": 0.07, "blue": 0.07}}}
+
+    fmt_requests = []
+    for item, result in zip(url_items, results):
+        row     = item["row"]           # 1-based
+        col     = item["col"] + 2       # columna siguiente a la URL (1-based)
+        status  = result.get("status", "INCIERTA")
+        value   = "SI" if status == "ACTIVA" else "NO"
+        cell_a1 = gu.rowcol_to_a1(row, col)
+        updates.append({"range": cell_a1, "values": [[value]]})
+
+        # Formato de color
+        fmt = fmt_green if value == "SI" else fmt_red
+        fmt_requests.append({
+            "repeatCell": {
+                "range": {
+                    "sheetId": worksheet.id,
+                    "startRowIndex": row - 1,
+                    "endRowIndex": row,
+                    "startColumnIndex": col - 1,
+                    "endColumnIndex": col,
+                },
+                "cell": {"userEnteredFormat": fmt},
+                "fields": "userEnteredFormat(backgroundColor,textFormat)",
+            }
+        })
+
+    if updates:
+        worksheet.batch_update(updates, value_input_option="RAW")
+
+    if fmt_requests:
+        worksheet.spreadsheet.batch_update({"requests": fmt_requests})
 
 
 def write_summary(worksheet: gspread.Worksheet, summary: dict, start_row: int) -> None:
