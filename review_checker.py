@@ -1,11 +1,13 @@
 """
-Verificador de reseñas Google Maps — 3 capas de detección:
+Verificador de reseñas Google Maps — capas de detección:
 
-  1. Fetch directo  — POST al formulario GDPR para obtener cookie real
-  2. Jina.ai        — renderiza JS desde servidores fuera EU
-  3. Claude Vision  — captura de pantalla (thum.io) + Claude lee la imagen
+  1. Fetch directo  — HTML estático + JSON-LD
+  2. Playwright     — Chromium headless (renderiza JS completo)
+  3. Claude Vision  — analiza el screenshot de Playwright
+  4. Jina.ai        — fallback si Playwright no está disponible
+  5. Vision thum.io — último recurso
 
-Clasificación final: ACTIVA | ELIMINADA | INCIERTA
+Clasificación final: ACTIVA | ELIMINADA | INCIERTA | ERRONEA | DUPLICADA
 """
 
 import asyncio
@@ -53,10 +55,7 @@ RATING_RE = re.compile(r'"ratingValue"\s*:\s*"?([1-5])"?(?!\d|[,.])', re.IGNOREC
 # ─── Extracción de texto desde HTML ───────────────────────────────────────────
 
 def _ld_review_body(obj) -> str:
-    """
-    Extrae texto SOLO de objetos JSON-LD @type='Review'.
-    Evita coger la descripción del negocio (LocalBusiness, Restaurant, etc.)
-    """
+    """Extrae texto SOLO de objetos JSON-LD @type='Review'."""
     if isinstance(obj, dict):
         obj_type = str(obj.get("@type", ""))
         if "Review" in obj_type:
@@ -64,7 +63,6 @@ def _ld_review_body(obj) -> str:
                 v = obj.get(k, "")
                 if isinstance(v, str) and len(v) > 1:
                     return v
-        # Recursión, saltando claves que pertenecen al negocio, no a la reseña
         for k, v in obj.items():
             if k in ("aggregateRating", "address", "geo", "openingHours", "image"):
                 continue
@@ -80,11 +78,7 @@ def _ld_review_body(obj) -> str:
 
 
 def _ld_rating(obj) -> int:
-    """
-    Extrae rating SOLO de objetos @type='Review'.
-    Ignora aggregateRating (rating general del negocio).
-    Solo acepta enteros exactos (5, no 4.2).
-    """
+    """Extrae rating SOLO de objetos @type='Review'. Solo acepta enteros exactos."""
     if isinstance(obj, dict):
         obj_type = str(obj.get("@type", ""))
         if "Review" in obj_type:
@@ -115,11 +109,6 @@ def _ld_rating(obj) -> int:
 
 
 def _extract_rating(html: str) -> int:
-    """
-    Extrae la puntuación de la reseña (1-5 estrellas).
-    Devuelve 0 si no se encuentra.
-    """
-    # 1. JSON-LD
     for ld_raw in re.findall(
         r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
         html, re.DOTALL | re.IGNORECASE,
@@ -131,7 +120,6 @@ def _extract_rating(html: str) -> int:
         except Exception:
             pass
 
-    # 2. Patrón directo en HTML ("ratingValue":4, starRating:5, etc.)
     m = RATING_RE.search(html)
     if m:
         try:
@@ -145,7 +133,7 @@ def _extract_rating(html: str) -> int:
 
 
 def _extract_review_text(html: str) -> str:
-    # 1. JSON-LD — único origen fiable: solo @type:Review tiene reviewBody real
+    # 1. JSON-LD (más fiable)
     for ld_raw in re.findall(
         r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
         html, re.DOTALL | re.IGNORECASE,
@@ -157,9 +145,8 @@ def _extract_review_text(html: str) -> str:
         except Exception:
             pass
 
-    # 2. Strings JS embebidos (fallback para cuando no hay JSON-LD de reseña)
+    # 2. Strings JS embebidos (fallback)
     seen: set[str] = set()
-    # Patrón de nombre de negocio: "TEXTO EN MAYÚS - Categoría" o "Nombre - Categoría"
     _biz_name_re = re.compile(r'^[A-ZÁÉÍÓÚÑ][^a-záéíóúñ]{2,}\s*[-–—]\s*\w', re.UNICODE)
     for raw in re.findall(r'"([^"\\]{10,400})"', html):
         text = raw.replace("\\n", " ").replace("\\t", " ").strip()
@@ -170,14 +157,12 @@ def _extract_review_text(html: str) -> str:
             continue
         if any(c in text for c in ("<", ">", "\\", "=", ";", "{", "}", "%", "@", ".")):
             continue
-        # Filtrar nombres de negocio tipo "EMPRESA - Categoría de servicio"
         if _biz_name_re.match(text):
             continue
         letters = sum(1 for c in text if c.isalpha())
         if letters / max(len(text), 1) < 0.70:
             continue
         words = text.split()
-        # Mínimo 2 palabras (cubre reseñas muy cortas tipo "Muy bueno")
         if len(words) >= 2 and all(len(w) <= 25 for w in words):
             return text[:350]
 
@@ -187,10 +172,6 @@ def _extract_review_text(html: str) -> str:
 # ─── Capa 1: Fetch directo con bypass consent GDPR ────────────────────────────
 
 async def _fetch_bypassing_consent(client: httpx.AsyncClient, url: str) -> tuple[str, str]:
-    """
-    Sigue todos los redirects. Si acaba en consent.google.com,
-    acepta el formulario mediante POST para obtener una cookie SOCS real.
-    """
     from urllib.parse import urljoin
 
     r = await client.get(url, headers=HEADERS, follow_redirects=True, timeout=15)
@@ -218,7 +199,6 @@ async def _fetch_bypassing_consent(client: httpx.AsyncClient, url: str) -> tuple
                     form_data[m.group(2)] = m.group(1)
             form_data["set_eom"] = "false"
 
-            print(f"[consent] POST {action} | campos: {list(form_data.keys())}", flush=True)
             r = await client.post(
                 action,
                 data=form_data,
@@ -226,17 +206,227 @@ async def _fetch_bypassing_consent(client: httpx.AsyncClient, url: str) -> tuple
                 follow_redirects=True,
                 timeout=15,
             )
-            print(f"[consent] POST → {r.status_code} | {str(r.url)[:80]}", flush=True)
-        else:
-            print("[consent] No se encontró formulario", flush=True)
 
     return r.text, str(r.url)
 
 
-# ─── Capa 2: Jina.ai Reader ───────────────────────────────────────────────────
+# ─── Capa 2: Playwright (Chromium headless real) ─────────────────────────────
+
+_PLAYWRIGHT_AVAILABLE: bool | None = None  # None = no comprobado aún
+
+async def _fetch_via_playwright(url: str) -> tuple[str, bytes | None]:
+    """
+    Renderiza la URL con Chromium headless real.
+    Devuelve (texto_de_la_página, screenshot_jpeg_bytes).
+    """
+    global _PLAYWRIGHT_AVAILABLE
+    if _PLAYWRIGHT_AVAILABLE is False:
+        return "", None
+
+    try:
+        from playwright.async_api import async_playwright  # type: ignore
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                ],
+            )
+            context = await browser.new_context(
+                user_agent=HEADERS["User-Agent"],
+                locale="en-US",
+                viewport={"width": 1280, "height": 900},
+            )
+            page = await context.new_page()
+
+            try:
+                await page.goto(url, wait_until="networkidle", timeout=25000)
+            except Exception:
+                # networkidle puede timeout; nos quedamos con lo que cargó
+                pass
+
+            # Esperar que el contenido dinámico termine de renderizar
+            await page.wait_for_timeout(2000)
+
+            text = await page.inner_text("body")
+            screenshot = await page.screenshot(
+                full_page=False, type="jpeg", quality=80
+            )
+            await browser.close()
+
+        _PLAYWRIGHT_AVAILABLE = True
+        print(f"[playwright] OK: {len(text)} chars | {len(screenshot)} bytes screenshot", flush=True)
+        return text, screenshot
+
+    except ImportError:
+        _PLAYWRIGHT_AVAILABLE = False
+        print("[playwright] No disponible (no instalado)", flush=True)
+        return "", None
+    except Exception as e:
+        print(f"[playwright] Error: {e}", flush=True)
+        return "", None
+
+
+def _classify_text(text: str, source: str) -> dict | None:
+    """Clasifica desde texto plano (Playwright, Jina, Vision)."""
+    text_lower = text.lower()
+
+    for phrase, label in DELETED_PHRASES:
+        if phrase in text_lower:
+            return {"status": "ELIMINADA", "detail": f"{label} [{source}]",
+                    "evidence": [f"'{phrase}'"], "review_text": ""}
+
+    # Palabras a ignorar al buscar texto de reseña
+    skip = {
+        "sign in", "open in", "jina", "http", "©", "terms", "privacy",
+        "directions from", "directions to", "get directions",
+    }
+    review_text = ""
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        line_lower = line.lower()
+        if any(s in line_lower for s in skip):
+            continue
+        words = line.split()
+        letters = sum(1 for c in line if c.isalpha())
+        # Mínimo 3 palabras y >50% letras — más permisivo que antes
+        if (len(words) >= 3
+                and letters / max(len(line), 1) > 0.50
+                and all(len(w) <= 30 for w in words)):
+            review_text = line[:350]
+            break
+
+    star_m = STAR_RE.search(text_lower)
+
+    if review_text:
+        return {"status": "ACTIVA", "detail": f"Texto encontrado [{source}]",
+                "evidence": [f'"{review_text[:100]}"'], "review_text": review_text}
+    if star_m:
+        return {"status": "ACTIVA", "detail": f"Estrellas [{source}]: '{star_m.group()}'",
+                "evidence": [f"'{star_m.group()}'"], "review_text": ""}
+    return None
+
+
+# ─── Capa 3: Claude Vision ────────────────────────────────────────────────────
+
+_VISION_PROMPT = """\
+This is a screenshot of a Google Maps review URL.
+
+Your task: decide if the specific user review is still ACTIVE or has been DELETED.
+
+Classification:
+- ACTIVA  → You can see a real user-written review (any text written by a person about a place).
+            A user profile page showing their review counts as ACTIVA.
+            Even a short review like "Great place!" is ACTIVA.
+- ELIMINADA → The page explicitly shows a deletion notice:
+              "no longer available", "review not found", "has been removed", etc.
+              OR the URL redirected to a generic place/business page (address, hours, photos)
+              with NO specific review text visible.
+- INCIERTA  → Only if: cookie/consent wall is blocking the view, blank page, 404 error,
+              or you genuinely cannot determine.
+
+Key signal: if the page shows a PLACE (restaurant, hotel, shop) with overview/photos/hours
+but NO specific review by a single user → that usually means the review was DELETED (ELIMINADA).
+
+Be generous: any visible user review text → ACTIVA.
+
+Reply ONLY with valid JSON (no markdown, no extra text):
+{"status":"ACTIVA|ELIMINADA|INCIERTA","review_text":"the review text you can read or empty","reason":"one-line explanation"}"""
+
+
+async def _check_via_vision(
+    url: str,
+    screenshot_bytes: bytes | None = None,
+) -> dict | None:
+    """
+    Analiza una captura de pantalla con Claude Vision.
+    Si se pasan screenshot_bytes (de Playwright), los usa directamente.
+    Si no, intenta thum.io como fallback.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        print("[vision] Sin ANTHROPIC_API_KEY — saltando capa Vision", flush=True)
+        return None
+
+    img_data = screenshot_bytes
+
+    # Fallback: thum.io si no tenemos screenshot de Playwright
+    if not img_data:
+        try:
+            screenshot_url = f"https://image.thum.io/get/width/1280/crop/900/{url}"
+            print(f"[vision] Capturando con thum.io: {screenshot_url[:80]}", flush=True)
+            async with httpx.AsyncClient(timeout=40, follow_redirects=True) as sc:
+                r = await sc.get(screenshot_url)
+            if r.status_code == 200 and len(r.content) >= 5000:
+                img_data = r.content
+                print(f"[vision] thum.io OK: {len(img_data)} bytes", flush=True)
+            else:
+                print(f"[vision] thum.io fallido: {r.status_code} / {len(r.content)} bytes", flush=True)
+        except Exception as e:
+            print(f"[vision] thum.io error: {e}", flush=True)
+
+    if not img_data or len(img_data) < 1000:
+        return None
+
+    try:
+        from anthropic import AsyncAnthropic  # type: ignore
+
+        img_b64 = base64.standard_b64encode(img_data).decode()
+        source_label = "Playwright" if screenshot_bytes else "thum.io"
+        print(f"[vision] Enviando a Claude Vision ({source_label}, {len(img_data)} bytes)", flush=True)
+
+        ai = AsyncAnthropic(api_key=api_key)
+        resp = await ai.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": img_b64,
+                        },
+                    },
+                    {"type": "text", "text": _VISION_PROMPT},
+                ],
+            }],
+        )
+
+        raw = resp.content[0].text.strip()
+        print(f"[vision] Claude respuesta: {raw[:300]}", flush=True)
+
+        json_m = re.search(r'\{.*\}', raw, re.DOTALL)
+        if json_m:
+            data = _json.loads(json_m.group())
+            status = data.get("status", "INCIERTA")
+            if status not in ("ACTIVA", "ELIMINADA", "INCIERTA"):
+                status = "INCIERTA"
+            return {
+                "status": status,
+                "detail": f"Claude Vision ({source_label}): {data.get('reason', '')}",
+                "review_text": data.get("review_text", ""),
+                "evidence": [f"Screenshot analizado por Claude Vision ({source_label})"],
+            }
+
+    except Exception as e:
+        print(f"[vision] Error Claude: {e}", flush=True)
+
+    return None
+
+
+# ─── Capa 4: Jina.ai Reader ───────────────────────────────────────────────────
 
 async def _fetch_via_jina(client: httpx.AsyncClient, url: str) -> tuple[str, str]:
-    """Jina.ai renderiza JS desde servidores propios (fuera EU), devuelve texto limpio."""
+    """Fallback: Jina.ai renderiza JS desde servidores propios."""
     jina_url = f"https://r.jina.ai/{url}"
     print(f"[jina] GET {jina_url[:80]}", flush=True)
     r = await client.get(
@@ -249,128 +439,12 @@ async def _fetch_via_jina(client: httpx.AsyncClient, url: str) -> tuple[str, str
     return r.text, str(r.url)
 
 
-def _classify_text(text: str, source: str) -> dict | None:
-    """Clasifica desde texto plano (Jina o Vision)."""
-    text_lower = text.lower()
-    for phrase, label in DELETED_PHRASES:
-        if phrase in text_lower:
-            return {"status": "ELIMINADA", "detail": f"{label} [{source}]",
-                    "evidence": [f"'{phrase}'"], "review_text": ""}
-
-    star_m = STAR_RE.search(text_lower)
-    review_text = ""
-    skip = {"google maps","sign in","directions","open in","share","saved","nearby",
-            "photos","reviews","overview","menu","jina","http","©","terms","privacy"}
-    for line in text.split("\n"):
-        line = line.strip()
-        if not line or any(s in line.lower() for s in skip):
-            continue
-        words = line.split()
-        letters = sum(1 for c in line if c.isalpha())
-        if len(words) >= 5 and letters / max(len(line), 1) > 0.55 and all(len(w) <= 25 for w in words):
-            review_text = line[:350]
-            break
-
-    if review_text:
-        return {"status": "ACTIVA", "detail": f"Texto encontrado [{source}]",
-                "evidence": [f'"{review_text[:100]}"'], "review_text": review_text}
-    if star_m:
-        return {"status": "ACTIVA", "detail": f"Estrellas [{source}]: '{star_m.group()}'",
-                "evidence": [f"'{star_m.group()}'"], "review_text": ""}
-    return None
-
-
-# ─── Capa 3: Claude Vision (screenshot de thum.io) ───────────────────────────
-
-async def _check_via_vision(url: str) -> dict | None:
-    """
-    Obtiene una captura de pantalla con thum.io (gratuito, sin API key)
-    y usa Claude Vision para leer el contenido y clasificar la reseña.
-    """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        print("[vision] Sin ANTHROPIC_API_KEY — saltando capa Vision", flush=True)
-        return None
-
-    try:
-        from anthropic import AsyncAnthropic
-
-        # thum.io captura desde servidores propios (sin consent GDPR)
-        screenshot_url = f"https://image.thum.io/get/width/1280/fullpage/{url}"
-        print(f"[vision] Capturando screenshot: {screenshot_url[:80]}", flush=True)
-
-        async with httpx.AsyncClient(timeout=40, follow_redirects=True) as sc:
-            r = await sc.get(screenshot_url)
-
-        if r.status_code != 200 or len(r.content) < 5000:
-            print(f"[vision] Screenshot fallido: {r.status_code} / {len(r.content)} bytes", flush=True)
-            return None
-
-        img_b64 = base64.standard_b64encode(r.content).decode()
-        content_type = r.headers.get("content-type", "image/jpeg").split(";")[0]
-        print(f"[vision] Screenshot OK: {len(r.content)} bytes ({content_type})", flush=True)
-
-        ai = AsyncAnthropic(api_key=api_key)
-        resp = await ai.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=300,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": content_type, "data": img_b64},
-                    },
-                    {
-                        "type": "text",
-                        "text": (
-                            "This is a screenshot of a Google Maps review URL.\n"
-                            "Determine the status and extract review text if visible.\n\n"
-                            "Rules:\n"
-                            "- ACTIVA: visible review text written by a user (the actual review content)\n"
-                            "- ELIMINADA: page explicitly says 'no longer available', "
-                            "'review not found', or similar deletion message\n"
-                            "- INCIERTA: consent/cookie page, generic Google Maps page, "
-                            "error page, or cannot clearly determine\n\n"
-                            "IMPORTANT: If you see a cookie consent form or GDPR page, "
-                            "classify as INCIERTA (not ELIMINADA).\n\n"
-                            "Respond ONLY with valid JSON:\n"
-                            '{"status":"ACTIVA|ELIMINADA|INCIERTA","review_text":"...","reason":"..."}'
-                        ),
-                    },
-                ],
-            }],
-        )
-
-        raw = resp.content[0].text.strip()
-        print(f"[vision] Claude respuesta: {raw[:200]}", flush=True)
-
-        # Extraer JSON aunque venga con texto alrededor
-        json_m = re.search(r'\{.*\}', raw, re.DOTALL)
-        if json_m:
-            data = _json.loads(json_m.group())
-            status = data.get("status", "INCIERTA")
-            if status not in ("ACTIVA", "ELIMINADA", "INCIERTA"):
-                status = "INCIERTA"
-            return {
-                "status": status,
-                "detail": f"Claude Vision: {data.get('reason', '')}",
-                "review_text": data.get("review_text", ""),
-                "evidence": [f"Screenshot analizado por Claude Vision"],
-            }
-
-    except Exception as e:
-        print(f"[vision] Error: {e}", flush=True)
-
-    return None
-
-
-# ─── Verificación de una URL (3 capas) ────────────────────────────────────────
+# ─── Verificación de una URL ──────────────────────────────────────────────────
 
 async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
     final_url = url
     try:
-        # ── Capa 1: fetch directo ──────────────────────────────────────────────
+        # ── Capa 1: fetch directo + JSON-LD ───────────────────────────────────
         html, final_url = await _fetch_bypassing_consent(client, url)
         html_lower = html.lower()
         print(f"[check] {url[:55]} | {len(html)} chars | {final_url[:70]}", flush=True)
@@ -381,7 +455,8 @@ async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
             for phrase, label in DELETED_PHRASES:
                 if phrase in html_lower:
                     return {"status": "ELIMINADA", "detail": label,
-                            "evidence": [f"'{phrase}'"], "review_text": "", "rating": 0, "final_url": final_url}
+                            "evidence": [f"'{phrase}'"], "review_text": "", "rating": 0,
+                            "final_url": final_url}
             rating = _extract_rating(html)
             rev = _extract_review_text(html)
             if rev or rating:
@@ -396,34 +471,60 @@ async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
             star_m = STAR_RE.search(html_lower)
             if star_m:
                 return {"status": "ACTIVA", "detail": f"Estrellas: '{star_m.group()}'",
-                        "evidence": [f"'{star_m.group()}'"], "review_text": "", "rating": 0, "final_url": final_url}
+                        "evidence": [f"'{star_m.group()}'"], "review_text": "", "rating": 0,
+                        "final_url": final_url}
 
-        # ── Capa 2: Jina.ai ───────────────────────────────────────────────────
-        print(f"[check] Capa 1 sin señal → Jina.ai", flush=True)
-        try:
-            jina_text, jina_url = await _fetch_via_jina(client, url)
-            res = _classify_text(jina_text, "Jina")
+        # ── Capa 2: Playwright (Chromium headless) ────────────────────────────
+        print(f"[check] Capa 1 sin señal → Playwright", flush=True)
+        pw_text, pw_screenshot = await _fetch_via_playwright(url)
+
+        if pw_text:
+            # 2a: clasificar el texto renderizado por Playwright
+            res = _classify_text(pw_text, "Playwright")
             if res:
-                res["final_url"] = jina_url
+                res["final_url"] = url
+                res["rating"] = 0
                 return res
-        except Exception as je:
-            print(f"[jina] Error: {je}", flush=True)
 
-        # ── Capa 3: Claude Vision ─────────────────────────────────────────────
-        print(f"[check] Capa 2 sin señal → Claude Vision", flush=True)
-        vision_res = await _check_via_vision(url)
-        if vision_res:
-            vision_res["final_url"] = url
-            return vision_res
+            # 2b: si el texto no fue concluyente, enviar screenshot a Claude Vision
+            if pw_screenshot:
+                print(f"[check] Playwright texto sin señal → Claude Vision", flush=True)
+                vision_res = await _check_via_vision(url, screenshot_bytes=pw_screenshot)
+                if vision_res:
+                    vision_res["final_url"] = url
+                    vision_res["rating"] = 0
+                    return vision_res
+        else:
+            # Playwright no disponible → fallback a Jina
+            print(f"[check] Playwright no disponible → Jina.ai", flush=True)
+            try:
+                jina_text, jina_url = await _fetch_via_jina(client, url)
+                res = _classify_text(jina_text, "Jina")
+                if res:
+                    res["final_url"] = jina_url
+                    res["rating"] = 0
+                    return res
+            except Exception as je:
+                print(f"[jina] Error: {je}", flush=True)
 
-        return {"status": "INCIERTA", "detail": "Sin señal en las 3 capas",
+            # Último recurso: thum.io + Vision
+            print(f"[check] Jina sin señal → Vision thum.io", flush=True)
+            vision_res = await _check_via_vision(url)
+            if vision_res:
+                vision_res["final_url"] = url
+                vision_res["rating"] = 0
+                return vision_res
+
+        return {"status": "INCIERTA", "detail": "Sin señal en todas las capas",
                 "evidence": [f"{final_url[:80]}", f"{len(html)} chars HTML"],
-                "review_text": "", "final_url": final_url}
+                "review_text": "", "rating": 0, "final_url": final_url}
 
     except httpx.TimeoutException:
-        return {"status": "INCIERTA", "detail": "Timeout", "evidence": [], "review_text": "", "final_url": final_url}
+        return {"status": "INCIERTA", "detail": "Timeout", "evidence": [], "review_text": "",
+                "rating": 0, "final_url": final_url}
     except Exception as exc:
-        return {"status": "INCIERTA", "detail": str(exc)[:120], "evidence": [], "review_text": "", "final_url": final_url}
+        return {"status": "INCIERTA", "detail": str(exc)[:120], "evidence": [], "review_text": "",
+                "rating": 0, "final_url": final_url}
 
 
 # ─── Stream ───────────────────────────────────────────────────────────────────
