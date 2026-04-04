@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 
 import sheets_handler
+import learning as _learning
 from review_checker import check_reviews_stream
 
 load_dotenv()
@@ -235,6 +236,14 @@ class SheetsRequest(BaseModel):
 class DirectRequest(BaseModel):
     urls: list[str]
 
+class FeedbackRequest(BaseModel):
+    url: str
+    auto_status: str
+    correct_status: str
+    review_text: str = ""
+    detail: str = ""
+    source: str = "manual"
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -296,6 +305,26 @@ async def job_status(job_id: str, since: int = 0):
         # (incluyendo cambios de _mark_duplicates que ocurren post-streaming)
         "all_results": job.results if job.done else None,
     }
+
+
+@app.post("/feedback")
+async def save_feedback(body: FeedbackRequest):
+    """Guarda una corrección del usuario para mejorar futuras clasificaciones."""
+    _learning.add_correction(
+        url=body.url,
+        auto_status=body.auto_status,
+        correct_status=body.correct_status,
+        review_text=body.review_text,
+        detail=body.detail,
+        source=body.source,
+    )
+    return {"ok": True, "stats": _learning.get_stats()}
+
+
+@app.get("/learning-stats")
+async def learning_stats():
+    """Retorna estadísticas del sistema de aprendizaje."""
+    return _learning.get_stats()
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ import re
 from typing import AsyncGenerator
 
 import httpx
+import learning as _learning
 
 # ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -148,11 +149,14 @@ def _extract_review_text(html: str) -> str:
     # 2. Strings JS embebidos (fallback)
     seen: set[str] = set()
     _biz_name_re = re.compile(r'^[A-ZÁÉÍÓÚÑ][^a-záéíóúñ]{2,}\s*[-–—]\s*\w', re.UNICODE)
+    bad_texts = set(t.lower() for t in _learning.get_bad_texts())
     for raw in re.findall(r'"([^"\\]{10,400})"', html):
         text = raw.replace("\\n", " ").replace("\\t", " ").strip()
         if text in seen:
             continue
         seen.add(text)
+        if text.lower() in bad_texts:
+            continue
         if text.startswith(("http", "/", "{", "M", "m", "data:", "function")):
             continue
         if any(c in text for c in ("<", ">", "\\", "=", ";", "{", "}", "%", "@", ".")):
@@ -290,6 +294,7 @@ def _classify_text(text: str, source: str) -> dict | None:
         "all reviews", "sort reviews", "translate review",
         "photos", "overview", "menu", "about", "updates",
     }
+    bad_texts = set(t.lower() for t in _learning.get_bad_texts())
     review_text = ""
     for line in text.split("\n"):
         line = line.strip()
@@ -297,6 +302,9 @@ def _classify_text(text: str, source: str) -> dict | None:
             continue
         line_lower = line.lower()
         if any(s in line_lower for s in skip):
+            continue
+        # Filtrar textos que el usuario marcó como falsos positivos
+        if line_lower in bad_texts or any(b in line_lower for b in bad_texts if len(b) > 5):
             continue
         words = line.split()
         letters = sum(1 for c in line if c.isalpha())
@@ -401,7 +409,7 @@ async def _check_via_vision(
                             "data": img_b64,
                         },
                     },
-                    {"type": "text", "text": _VISION_PROMPT},
+                    {"type": "text", "text": _VISION_PROMPT + _learning.build_vision_few_shot()},
                 ],
             }],
         )

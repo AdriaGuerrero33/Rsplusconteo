@@ -205,9 +205,12 @@
   </div>
 
   <div class="card results-table-wrap" id="results-table-wrap">
-    <h3>Resultados detallados</h3>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">Resultados detallados</h3>
+      <span id="learning-stats" style="display:none;font-size:12px;color:#6b7280;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:999px;padding:4px 12px"></span>
+    </div>
     <table>
-      <thead><tr><th>#</th><th>URL</th><th>Estado</th><th>⭐ Estrellas</th><th>Texto de reseña</th><th>Motivo</th></tr></thead>
+      <thead><tr><th>#</th><th>URL</th><th>Estado</th><th>⭐ Estrellas</th><th>Texto de reseña</th><th>Motivo</th><th></th></tr></thead>
       <tbody id="results-tbody"></tbody>
     </table>
   </div>
@@ -525,16 +528,21 @@
         ? `<span style="font-size:14px">${"⭐".repeat(r)}</span>`
           + (r < 5 ? `<span style="color:#d97706;font-size:11px;font-weight:600;margin-left:4px">⚠ ${r}/5</span>` : `<span style="color:#059669;font-size:11px;margin-left:4px">${r}/5</span>`)
         : `<span style="color:#9ca3af;font-size:11px">—</span>`;
+      tr.dataset.resultIdx = i;
       tr.innerHTML =
         `<td>${i+1}</td>`+
         `<td><a href="${escapeHtml(row.url)}" target="_blank" style="color:#4f46e5">${escapeHtml(row.url)}</a></td>`+
-        `<td><span class="badge ${row.status}">${row.status}</span></td>`+
+        `<td><span class="badge ${row.status}" id="badge-row-${i}">${row.status}</span></td>`+
         `<td style="white-space:nowrap">${starsHtml}</td>`+
         `<td style="max-width:220px;font-size:12px">${reviewHtml}</td>`+
-        `<td>${escapeHtml(row.detail||"")}${ev}</td>`;
+        `<td>${escapeHtml(row.detail||"")}${ev}</td>`+
+        `<td><button onclick="quickCorrect(${i}, this)" title="Corregir clasificación" `+
+        `style="background:none;border:1px solid #e5e7eb;border-radius:6px;padding:2px 7px;cursor:pointer;font-size:12px;color:#6b7280">✏️</button></td>`;
       tbody.appendChild(tr);
     });
     document.getElementById("results-table-wrap").classList.add("visible");
+    // Cargar estadísticas de aprendizaje
+    fetch("/learning-stats").then(r=>r.json()).then(_updateLearningBadge).catch(()=>{});
   }
 
   function showError(message) {
@@ -652,18 +660,48 @@
   function classifyReview(newStatus) {
     if (_reviewPos >= _reviewQueue.length) return;
     const idx = _reviewQueue[_reviewPos];
-    const oldStatus = _allResults[idx].status;
+    const row = _allResults[idx];
+    const oldStatus = row.status;
+
+    // Enviar feedback al servidor para aprendizaje
+    _sendFeedback(row.url, oldStatus, newStatus, row.review_text || "", row.detail || "");
 
     // Actualizar contadores en UI
     _updateCounter(oldStatus, -1);
     _updateCounter(newStatus, +1);
 
     // Actualizar resultado
-    _allResults[idx].status = newStatus;
-    _allResults[idx].detail = `Clasificado manualmente como ${newStatus}`;
+    row.status = newStatus;
+    row.detail = `Revisado manualmente → ${newStatus}`;
 
     _reviewPos++;
     _showReviewItem();
+  }
+
+  async function _sendFeedback(url, autoStatus, correctStatus, reviewText, detail, source) {
+    try {
+      const r = await fetch("/feedback", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          url, auto_status: autoStatus, correct_status: correctStatus,
+          review_text: reviewText || "", detail: detail || "",
+          source: source || "manual",
+        }),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        _updateLearningBadge(data.stats);
+      }
+    } catch(e) { /* silencioso */ }
+  }
+
+  function _updateLearningBadge(stats) {
+    const el = document.getElementById("learning-stats");
+    if (!el || !stats) return;
+    const acc = stats.accuracy_pct !== null ? `${stats.accuracy_pct}% precisión · ` : "";
+    el.textContent = `🧠 ${acc}${stats.bad_texts_learned} patrones aprendidos · ${stats.corrected_by_user} correcciones`;
+    el.style.display = "";
   }
 
   function skipReview() {
@@ -680,6 +718,66 @@
     } else {
       document.getElementById("review-badge").textContent = remaining;
     }
+  }
+
+  // ── Corrección rápida desde la tabla ────────────────────────────────────────
+  const _STATUSES_LIST = ["ACTIVA","ELIMINADA","INCIERTA","ERRONEA","DUPLICADA"];
+
+  function quickCorrect(idx, btn) {
+    const row = _allResults[idx];
+    if (!row) return;
+
+    // Construir mini-selector emergente
+    const existing = document.getElementById("quick-correct-popup");
+    if (existing) existing.remove();
+
+    const popup = document.createElement("div");
+    popup.id = "quick-correct-popup";
+    popup.style.cssText = "position:fixed;background:white;border:1px solid #e5e7eb;border-radius:10px;box-shadow:0 4px 20px rgba(0,0,0,.15);padding:12px;z-index:2000;display:flex;flex-direction:column;gap:6px;min-width:170px";
+
+    const title = document.createElement("div");
+    title.style.cssText = "font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;margin-bottom:4px";
+    title.textContent = "Cambiar a:";
+    popup.appendChild(title);
+
+    _STATUSES_LIST.forEach(s => {
+      const b = document.createElement("button");
+      b.textContent = s;
+      b.className = `badge ${s}`;
+      b.style.cssText = "display:block;width:100%;text-align:left;padding:6px 10px;cursor:pointer;border-radius:6px;font-size:12px;font-weight:700;border:none";
+      if (s === row.status) b.style.outline = "2px solid #4f46e5";
+      b.onclick = () => {
+        const oldStatus = row.status;
+        if (oldStatus !== s) {
+          _sendFeedback(row.url, oldStatus, s, row.review_text||"", row.detail||"", "table");
+          _updateCounter(oldStatus, -1);
+          _updateCounter(s, +1);
+          row.status = s;
+          row.detail = `Corregido manualmente → ${s}`;
+          // Actualizar badge en la tabla
+          const badge = document.getElementById(`badge-row-${idx}`);
+          if (badge) { badge.className = `badge ${s}`; badge.textContent = s; }
+        }
+        popup.remove();
+      };
+      popup.appendChild(b);
+    });
+
+    // Posicionar cerca del botón
+    const rect = btn.getBoundingClientRect();
+    popup.style.top  = (rect.bottom + window.scrollY + 4) + "px";
+    popup.style.left = Math.max(8, rect.left + window.scrollX - 60) + "px";
+    document.body.appendChild(popup);
+
+    // Cerrar al hacer click fuera
+    setTimeout(() => {
+      document.addEventListener("click", function close(e) {
+        if (!popup.contains(e.target) && e.target !== btn) {
+          popup.remove();
+          document.removeEventListener("click", close);
+        }
+      });
+    }, 50);
   }
 
   function _updateCounter(status, delta) {
