@@ -448,6 +448,16 @@ async def _fetch_via_jina(client: httpx.AsyncClient, url: str) -> tuple[str, str
 
 async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
     final_url = url
+    _capture: bytes | None = None  # screenshot de Playwright para revisión manual
+
+    def _incierta(detail: str, evidence: list | None = None) -> dict:
+        return {
+            "status": "INCIERTA", "detail": detail,
+            "evidence": evidence or [], "review_text": "",
+            "rating": 0, "final_url": final_url,
+            "_screenshot": _capture,        # None si no se capturó
+        }
+
     try:
         # ── Capa 1: fetch directo + JSON-LD ───────────────────────────────────
         html, final_url = await _fetch_bypassing_consent(client, url)
@@ -481,7 +491,7 @@ async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
 
         # ── Capa 2: Playwright (Chromium headless) ────────────────────────────
         print(f"[check] Capa 1 sin señal → Playwright", flush=True)
-        pw_text, pw_screenshot = await _fetch_via_playwright(url)
+        pw_text, _capture = await _fetch_via_playwright(url)
 
         if pw_text:
             # 2a: clasificar el texto renderizado por Playwright
@@ -492,12 +502,15 @@ async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
                 return res
 
             # 2b: si el texto no fue concluyente, enviar screenshot a Claude Vision
-            if pw_screenshot:
+            if _capture:
                 print(f"[check] Playwright texto sin señal → Claude Vision", flush=True)
-                vision_res = await _check_via_vision(url, screenshot_bytes=pw_screenshot)
+                vision_res = await _check_via_vision(url, screenshot_bytes=_capture)
                 if vision_res:
                     vision_res["final_url"] = url
                     vision_res["rating"] = 0
+                    # Si Vision tampoco pudo determinar, incluir screenshot para revisión manual
+                    if vision_res["status"] == "INCIERTA":
+                        vision_res["_screenshot"] = _capture
                     return vision_res
         else:
             # Playwright no disponible → fallback a Jina
@@ -520,16 +533,13 @@ async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
                 vision_res["rating"] = 0
                 return vision_res
 
-        return {"status": "INCIERTA", "detail": "Sin señal en todas las capas",
-                "evidence": [f"{final_url[:80]}", f"{len(html)} chars HTML"],
-                "review_text": "", "rating": 0, "final_url": final_url}
+        return _incierta("Sin señal en todas las capas",
+                         [f"{final_url[:80]}", f"{len(html)} chars HTML"])
 
     except httpx.TimeoutException:
-        return {"status": "INCIERTA", "detail": "Timeout", "evidence": [], "review_text": "",
-                "rating": 0, "final_url": final_url}
+        return _incierta("Timeout")
     except Exception as exc:
-        return {"status": "INCIERTA", "detail": str(exc)[:120], "evidence": [], "review_text": "",
-                "rating": 0, "final_url": final_url}
+        return _incierta(str(exc)[:120])
 
 
 # ─── Stream ───────────────────────────────────────────────────────────────────

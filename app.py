@@ -13,8 +13,8 @@ import os
 import uuid
 from dataclasses import dataclass, field
 
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
@@ -43,6 +43,7 @@ class JobState:
     sheet_url:   str|None  = None
     results_tab: str|None  = None
     log:         list      = field(default_factory=list)
+    screenshots: dict      = field(default_factory=dict)  # result_index -> jpeg bytes
 
 _jobs: dict[str, JobState] = {}
 
@@ -156,13 +157,19 @@ async def _run_sheets_job(job_id: str, sheet_url: str) -> None:
         async for result in check_reviews_stream(url_items, MAX_CONCURRENT, DELAY):
             status = result.get("status", "INCIERTA")
             _count(job.counters, status)
+            # Guardar screenshot si existe (para revisión manual de inciertas)
+            sc_bytes = result.pop("_screenshot", None)
+            idx = len(job.results)
+            if sc_bytes and status == "INCIERTA":
+                job.screenshots[idx] = sc_bytes
             job.results.append({
-                "url":         result.get("url", ""),
-                "status":      status,
-                "detail":      result.get("detail", ""),
-                "evidence":    result.get("evidence", []),
-                "review_text": result.get("review_text", ""),
-                "rating":      result.get("rating", 0),
+                "url":          result.get("url", ""),
+                "status":       status,
+                "detail":       result.get("detail", ""),
+                "evidence":     result.get("evidence", []),
+                "review_text":  result.get("review_text", ""),
+                "rating":       result.get("rating", 0),
+                "has_screenshot": idx in job.screenshots,
             })
 
         # Escribir SI/NO en la hoja original (al lado de cada URL)
@@ -198,13 +205,18 @@ async def _run_direct_job(job_id: str, urls: list[str]) -> None:
         async for result in check_reviews_stream(url_items, MAX_CONCURRENT, DELAY):
             status = result.get("status", "INCIERTA")
             _count(job.counters, status)
+            sc_bytes = result.pop("_screenshot", None)
+            idx = len(job.results)
+            if sc_bytes and status == "INCIERTA":
+                job.screenshots[idx] = sc_bytes
             job.results.append({
-                "url":         result.get("url", ""),
-                "status":      status,
-                "detail":      result.get("detail", ""),
-                "evidence":    result.get("evidence", []),
-                "review_text": result.get("review_text", ""),
-                "rating":      result.get("rating", 0),
+                "url":          result.get("url", ""),
+                "status":       status,
+                "detail":       result.get("detail", ""),
+                "evidence":     result.get("evidence", []),
+                "review_text":  result.get("review_text", ""),
+                "rating":       result.get("rating", 0),
+                "has_screenshot": idx in job.screenshots,
             })
 
         _mark_duplicates(job)
@@ -234,6 +246,18 @@ async def index():
 async def health():
     has_creds = bool(os.getenv("GOOGLE_CREDENTIALS_JSON", "").strip())
     return JSONResponse({"status": "ok", "credentials_env_set": has_creds})
+
+
+@app.get("/job/{job_id}/screenshot/{idx}")
+async def get_screenshot(job_id: str, idx: int):
+    """Devuelve el screenshot JPEG de una reseña INCIERTA para revisión manual."""
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    sc = job.screenshots.get(idx)
+    if sc is None:
+        raise HTTPException(status_code=404, detail="Screenshot not available")
+    return Response(content=sc, media_type="image/jpeg")
 
 
 @app.post("/start-job-sheets")
@@ -267,6 +291,7 @@ async def job_status(job_id: str, since: int = 0):
         "log":         job.log,
         "sheet_url":   job.sheet_url,
         "results_tab": job.results_tab,
+        "job_id":      job_id,
     }
 
 

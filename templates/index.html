@@ -94,9 +94,12 @@
     .evidence-list { font-size:11px; color:#9ca3af; margin-top:2px; }
     @media(max-width:560px){ .counters{grid-template-columns:repeat(2,1fr)} .input-row{flex-direction:column} }
 
-    /* ── Botón informe ── */
-    .btn-report { padding:10px 18px; background:#4f46e5; color:white; border:none; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap; transition:background .2s; }
-    .btn-report:hover { background:#4338ca; }
+    /* ── Botones resultado ── */
+    .btn-report  { padding:10px 18px; background:#4f46e5; color:white; border:none; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap; transition:background .2s; }
+    .btn-report:hover  { background:#4338ca; }
+    .btn-review  { padding:10px 18px; background:#d97706; color:white; border:none; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap; transition:background .2s; }
+    .btn-review:hover  { background:#b45309; }
+    .review-badge { display:inline-block; background:#ef4444; color:white; border-radius:999px; font-size:11px; font-weight:700; padding:1px 6px; margin-left:5px; vertical-align:middle; }
 
     /* ── Modal ── */
     .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:1000; align-items:flex-start; justify-content:center; padding:24px 16px; overflow-y:auto; }
@@ -115,6 +118,9 @@
     .btn-csv:hover { background:#047857; }
     .btn-cancel { padding:10px 18px; background:#f3f4f6; color:#374151; border:none; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; transition:background .2s; }
     .btn-cancel:hover { background:#e5e7eb; }
+
+    .manual-btn { padding:9px 16px; border-radius:8px; font-size:13px; font-weight:700; cursor:pointer; transition:opacity .15s; }
+    .manual-btn:hover { opacity:.8; }
 
     /* Tabla del modal */
     .modal-table { width:100%; border-collapse:collapse; font-size:13px; }
@@ -192,6 +198,7 @@
   <div class="result-card" id="result-card">
     <span class="result-text" id="result-text"></span>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="btn-review" id="btn-review" onclick="openManualReview()" style="display:none">🔍 Revisar inciertas<span class="review-badge" id="review-badge">0</span></button>
       <button class="btn-report" id="btn-report" onclick="openReportEditor()" style="display:none">📊 Editar y Descargar Informe</button>
       <a class="btn-sheet" id="result-link" href="#" target="_blank">Ver en Google Sheets →</a>
     </div>
@@ -203,6 +210,55 @@
       <thead><tr><th>#</th><th>URL</th><th>Estado</th><th>⭐ Estrellas</th><th>Texto de reseña</th><th>Motivo</th></tr></thead>
       <tbody id="results-tbody"></tbody>
     </table>
+  </div>
+</div>
+
+<!-- ── Modal revisión manual de inciertas ──────────────────────────── -->
+<div class="modal-overlay" id="review-modal" onclick="closeReviewOnOverlay(event)">
+  <div class="modal" style="max-width:820px">
+    <div class="modal-header">
+      <div>
+        <h2>Revisión manual</h2>
+        <p id="review-progress-text">Revisando reseña 1 de N</p>
+      </div>
+      <button class="modal-close" onclick="closeManualReview()">×</button>
+    </div>
+    <div class="modal-body" style="padding:20px 24px">
+      <!-- Info de la reseña -->
+      <div style="margin-bottom:14px">
+        <div style="font-size:11px;color:#9ca3af;margin-bottom:4px">URL</div>
+        <a id="review-url-link" href="#" target="_blank" style="color:#4f46e5;font-size:13px;word-break:break-all"></a>
+      </div>
+      <div style="margin-bottom:14px;display:flex;gap:12px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:11px;color:#9ca3af;margin-bottom:3px">Detección automática</div>
+          <span id="review-auto-badge" class="badge"></span>
+          <span id="review-auto-detail" style="font-size:12px;color:#6b7280;margin-left:8px"></span>
+        </div>
+      </div>
+      <!-- Screenshot -->
+      <div id="review-screenshot-wrap" style="border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;margin-bottom:18px;min-height:120px;display:flex;align-items:center;justify-content:center;background:#f9fafb">
+        <img id="review-screenshot-img" src="" alt="Screenshot" style="width:100%;display:none" />
+        <div id="review-screenshot-msg" style="font-size:13px;color:#9ca3af;padding:24px">Cargando captura...</div>
+      </div>
+      <!-- Botones de clasificación -->
+      <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:10px">¿Cuál es el estado correcto?</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="manual-btn" data-status="ACTIVA"    onclick="classifyReview('ACTIVA')"    style="background:#d1fae5;color:#065f46;border:2px solid #6ee7b7">✓ ACTIVA</button>
+        <button class="manual-btn" data-status="ELIMINADA" onclick="classifyReview('ELIMINADA')" style="background:#fee2e2;color:#991b1b;border:2px solid #fca5a5">✗ ELIMINADA</button>
+        <button class="manual-btn" data-status="INCIERTA"  onclick="classifyReview('INCIERTA')"  style="background:#ffedd5;color:#9a3412;border:2px solid #fdba74">? INCIERTA</button>
+        <button class="manual-btn" data-status="ERRONEA"   onclick="classifyReview('ERRONEA')"   style="background:#ffe4e6;color:#9f1239;border:2px solid #fda4af">⚠ ERRÓNEA</button>
+        <button class="manual-btn" data-status="DUPLICADA" onclick="classifyReview('DUPLICADA')" style="background:#ede9fe;color:#5b21b6;border:2px solid #c4b5fd">⬡ DUPLICADA</button>
+        <button onclick="skipReview()" style="background:#f3f4f6;color:#6b7280;border:2px solid #e5e7eb" class="manual-btn">→ Saltar</button>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <span class="footer-info" id="review-footer-info"></span>
+      <div class="footer-btns">
+        <button class="btn-cancel" onclick="closeManualReview()">Cerrar</button>
+        <button class="btn-csv" id="review-finish-btn" onclick="finishReview()" style="display:none">✓ Finalizar revisión</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -244,6 +300,7 @@
   let _pollTimer   = null;
   let _allResults  = [];   // acumula todos los resultados para la tabla final
   let _lastLogLen  = 0;
+  let _currentJobId = null;  // job_id actual (para URLs de screenshot)
 
   function _stopPoll() { if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; } }
 
@@ -265,6 +322,7 @@
         body: JSON.stringify({sheet_url: url})
       });
       const {job_id} = await res.json();
+      _currentJobId = job_id;
       addLog("info","ℹ","Trabajo iniciado, esperando resultados...");
       poll(job_id, 0, "sheet");
     } catch(err) {
@@ -412,6 +470,12 @@
 
   function _showReportBtn() {
     document.getElementById("btn-report").style.display = "";
+    // Mostrar botón de revisión manual si hay inciertas con screenshot
+    const inciertas = _allResults.filter(r => r.status === "INCIERTA" && r.has_screenshot);
+    if (inciertas.length > 0) {
+      document.getElementById("review-badge").textContent = inciertas.length;
+      document.getElementById("btn-review").style.display = "";
+    }
   }
 
   function showResultSheet(data) {
@@ -494,6 +558,8 @@
     document.getElementById("results-tbody").innerHTML = "";
     document.getElementById("progress-section").classList.remove("visible");
     document.getElementById("btn-report").style.display = "none";
+    document.getElementById("btn-review").style.display = "none";
+    _currentJobId = null;
   }
 
   function setButtonsDisabled(val) {
@@ -505,6 +571,126 @@
     return String(text)
       .replace(/&/g,"&amp;").replace(/</g,"&lt;")
       .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+
+  // ── Revisión manual de inciertas ────────────────────────────────────────────
+  let _reviewQueue  = [];   // índices en _allResults que son INCIERTA con screenshot
+  let _reviewPos    = 0;    // posición actual en la cola
+
+  function openManualReview() {
+    _reviewQueue = _allResults
+      .map((r, i) => i)
+      .filter(i => _allResults[i].status === "INCIERTA" && _allResults[i].has_screenshot);
+    _reviewPos = 0;
+    if (_reviewQueue.length === 0) return;
+    document.getElementById("review-modal").classList.add("open");
+    document.body.style.overflow = "hidden";
+    _showReviewItem();
+  }
+
+  function _showReviewItem() {
+    if (_reviewPos >= _reviewQueue.length) {
+      // Todos revisados
+      document.getElementById("review-progress-text").textContent = "¡Revisión completada!";
+      document.getElementById("review-screenshot-img").style.display = "none";
+      document.getElementById("review-screenshot-msg").textContent = "Todas las reseñas inciertas han sido revisadas.";
+      document.getElementById("review-screenshot-msg").style.display = "";
+      document.getElementById("review-finish-btn").style.display = "";
+      document.getElementById("review-footer-info").textContent = `${_reviewQueue.length} revisadas`;
+      return;
+    }
+
+    const idx    = _reviewQueue[_reviewPos];
+    const row    = _allResults[idx];
+    const total  = _reviewQueue.length;
+    const jobId  = _currentJobId;
+
+    document.getElementById("review-progress-text").textContent =
+      `Revisando reseña ${_reviewPos + 1} de ${total} — #${idx + 1}`;
+    document.getElementById("review-footer-info").textContent =
+      `${_reviewPos} de ${total} revisadas`;
+    document.getElementById("review-finish-btn").style.display = "none";
+
+    // URL
+    const urlEl = document.getElementById("review-url-link");
+    urlEl.href = row.url; urlEl.textContent = row.url;
+
+    // Auto badge
+    const badge = document.getElementById("review-auto-badge");
+    badge.className = `badge ${row.status}`;
+    badge.textContent = row.status;
+    document.getElementById("review-auto-detail").textContent = row.detail || "";
+
+    // Screenshot
+    const img = document.getElementById("review-screenshot-img");
+    const msg = document.getElementById("review-screenshot-msg");
+    img.style.display = "none";
+    msg.textContent = "Cargando captura de pantalla...";
+    msg.style.display = "";
+
+    if (jobId) {
+      img.onload = () => { img.style.display = "block"; msg.style.display = "none"; };
+      img.onerror = () => { msg.textContent = "No se pudo cargar la captura."; };
+      img.src = `/job/${jobId}/screenshot/${idx}?t=${Date.now()}`;
+    } else {
+      msg.textContent = "Captura no disponible (sesión expirada).";
+    }
+  }
+
+  function classifyReview(newStatus) {
+    if (_reviewPos >= _reviewQueue.length) return;
+    const idx = _reviewQueue[_reviewPos];
+    const oldStatus = _allResults[idx].status;
+
+    // Actualizar contadores en UI
+    _updateCounter(oldStatus, -1);
+    _updateCounter(newStatus, +1);
+
+    // Actualizar resultado
+    _allResults[idx].status = newStatus;
+    _allResults[idx].detail = `Clasificado manualmente como ${newStatus}`;
+
+    _reviewPos++;
+    _showReviewItem();
+  }
+
+  function skipReview() {
+    _reviewPos++;
+    _showReviewItem();
+  }
+
+  function finishReview() {
+    closeManualReview();
+    // Actualizar badge del botón con inciertas que quedan sin revisar
+    const remaining = _allResults.filter(r => r.status === "INCIERTA" && r.has_screenshot).length;
+    if (remaining === 0) {
+      document.getElementById("btn-review").style.display = "none";
+    } else {
+      document.getElementById("review-badge").textContent = remaining;
+    }
+  }
+
+  function _updateCounter(status, delta) {
+    const map = {
+      "ACTIVA":    "cnt-activas",
+      "ELIMINADA": "cnt-eliminadas",
+      "INCIERTA":  "cnt-inciertas",
+      "DUPLICADA": "cnt-duplicadas",
+      "ERRONEA":   "cnt-erroneas",
+    };
+    const id = map[status];
+    if (!id) return;
+    const el = document.getElementById(id);
+    el.textContent = Math.max(0, (parseInt(el.textContent) || 0) + delta);
+  }
+
+  function closeManualReview() {
+    document.getElementById("review-modal").classList.remove("open");
+    document.body.style.overflow = "";
+  }
+
+  function closeReviewOnOverlay(e) {
+    if (e.target === document.getElementById("review-modal")) closeManualReview();
   }
 
   // ── Informe editable ────────────────────────────────────────────────────────
