@@ -57,10 +57,10 @@ def _count(counters: dict, status: str) -> None:
 
 def _mark_duplicates(job: "JobState") -> None:
     """
-    Detecta textos de reseña muy similares (≥95%) tras completar la verificación.
-    El primero del grupo permanece ACTIVA; los posteriores se marcan DUPLICADA
-    con referencia a la reseña original.
-    Solo compara textos con ≥6 palabras y descarta nombres de negocio.
+    Detecta duplicadas por dos criterios (en orden de prioridad):
+    1. Misma URL exacta → el segundo es DUPLICADA del primero
+    2. Texto de reseña muy similar (≥95%) → el posterior es DUPLICADA del anterior
+    El primero de cada grupo siempre permanece con su estado original.
     """
     import re as _re
     from difflib import SequenceMatcher
@@ -70,37 +70,61 @@ def _mark_duplicates(job: "JobState") -> None:
     def _norm(t: str) -> str:
         return " ".join(t.lower().split())
 
-    # Recoger candidatos (índice → texto normalizado)
-    candidates: list[tuple[int, str]] = []
-    for i, r in enumerate(job.results):
-        text = (r.get("review_text") or "").strip()
-        if not text or len(text.split()) < 6 or _biz.match(text):
-            continue
-        candidates.append((i, _norm(text)))
-
-    # Comparar pares: O(n²) pero lista corta en la práctica
-    duplicate_of: dict[int, int] = {}  # índice duplicado → índice original
-    for a in range(len(candidates)):
-        idx_a, txt_a = candidates[a]
-        if idx_a in duplicate_of:
-            continue  # ya marcado como duplicado
-        for b in range(a + 1, len(candidates)):
-            idx_b, txt_b = candidates[b]
-            if idx_b in duplicate_of:
-                continue
-            ratio = SequenceMatcher(None, txt_a, txt_b).ratio()
-            if ratio >= 0.95:
-                duplicate_of[idx_b] = idx_a  # b es duplicado de a
-
-    for dup_idx, orig_idx in duplicate_of.items():
+    def _apply_duplicate(dup_idx: int, orig_idx: int, reason: str) -> None:
         old_status = job.results[dup_idx]["status"]
         if old_status == "ACTIVA":
             job.counters["activas"] -= 1
         elif old_status == "ERRONEA":
             job.counters["erroneas"] -= 1
+        elif old_status == "INCIERTA":
+            job.counters["inciertas"] -= 1
         job.results[dup_idx]["status"] = "DUPLICADA"
-        job.results[dup_idx]["detail"] = f"Texto idéntico a reseña #{orig_idx + 1}"
+        job.results[dup_idx]["detail"] = reason
         job.counters["duplicadas"] += 1
+
+    duplicate_of: dict[int, int] = {}  # índice duplicado → índice original
+
+    # ── 1. Duplicadas por URL idéntica ────────────────────────────────────────
+    url_seen: dict[str, int] = {}
+    for i, r in enumerate(job.results):
+        url = (r.get("url") or "").strip().lower()
+        if not url:
+            continue
+        if url in url_seen:
+            duplicate_of[i] = url_seen[url]
+        else:
+            url_seen[url] = i
+
+    # ── 2. Duplicadas por texto similar (≥95%) ────────────────────────────────
+    candidates: list[tuple[int, str]] = []
+    for i, r in enumerate(job.results):
+        if i in duplicate_of:
+            continue  # ya marcado como duplicado por URL
+        text = (r.get("review_text") or "").strip()
+        if not text or len(text.split()) < 6 or _biz.match(text):
+            continue
+        candidates.append((i, _norm(text)))
+
+    for a in range(len(candidates)):
+        idx_a, txt_a = candidates[a]
+        if idx_a in duplicate_of:
+            continue
+        for b in range(a + 1, len(candidates)):
+            idx_b, txt_b = candidates[b]
+            if idx_b in duplicate_of:
+                continue
+            if SequenceMatcher(None, txt_a, txt_b).ratio() >= 0.95:
+                duplicate_of[idx_b] = idx_a
+
+    # ── Aplicar marcas ────────────────────────────────────────────────────────
+    for dup_idx, orig_idx in duplicate_of.items():
+        url_dup  = (job.results[dup_idx].get("url") or "").strip().lower()
+        url_orig = (job.results[orig_idx].get("url") or "").strip().lower()
+        if url_dup == url_orig:
+            reason = f"URL idéntica a reseña #{orig_idx + 1}"
+        else:
+            reason = f"Texto idéntico a reseña #{orig_idx + 1}"
+        _apply_duplicate(dup_idx, orig_idx, reason)
 
 
 # ── Trabajos en background ────────────────────────────────────────────────────

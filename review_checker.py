@@ -280,10 +280,15 @@ def _classify_text(text: str, source: str) -> dict | None:
             return {"status": "ELIMINADA", "detail": f"{label} [{source}]",
                     "evidence": [f"'{phrase}'"], "review_text": ""}
 
-    # Palabras a ignorar al buscar texto de reseña
+    # Frases de UI de Google Maps / Jina que NO son texto de reseña
     skip = {
         "sign in", "open in", "jina", "http", "©", "terms", "privacy",
         "directions from", "directions to", "get directions",
+        "search google maps", "search maps", "google maps",
+        "share", "save", "nearby", "send to phone", "suggest an edit",
+        "see photos", "write a review", "add a review", "more reviews",
+        "all reviews", "sort reviews", "translate review",
+        "photos", "overview", "menu", "about", "updates",
     }
     review_text = ""
     for line in text.split("\n"):
