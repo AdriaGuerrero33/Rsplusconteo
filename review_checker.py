@@ -40,14 +40,50 @@ HEADERS = {
 }
 
 DELETED_PHRASES: list[tuple[str, str]] = [
-    ("no longer available",       "EN: 'no longer available'"),
-    ("review is no longer",       "EN: 'review is no longer'"),
-    ("ya no está disponible",     "ES: 'ya no está disponible'"),
-    ("esta reseña ya no",         "ES: 'esta reseña ya no'"),
-    ("reseña no disponible",      "ES: 'reseña no disponible'"),
-    ("cette avis n'est plus",     "FR: n'est plus disponible"),
-    ("diese rezension ist nicht", "DE: rezension nicht"),
+    ("no longer available",          "Reseña eliminada (EN)"),
+    ("review is no longer",          "Reseña eliminada (EN)"),
+    ("ya no está disponible",        "Reseña eliminada (ES)"),
+    ("esta reseña ya no",            "Reseña eliminada (ES)"),
+    ("reseña no disponible",         "Reseña no disponible (ES)"),
+    ("cette avis n'est plus",        "Reseña eliminada (FR)"),
+    ("diese rezension ist nicht",    "Reseña eliminada (DE)"),
+    ("this review has been removed", "Reseña eliminada (EN)"),
+    ("review not found",             "Reseña no encontrada (EN)"),
 ]
+
+# Cadenas de la interfaz de Google Maps que nunca son texto de reseña real
+GOOGLE_UI_STRINGS: set[str] = {
+    # Navegación y botones
+    "contraer panel lateral", "expandir panel lateral", "cerrar",
+    "abrir en google maps", "ver en google maps", "open in google maps",
+    "search google maps", "search maps", "buscar en google maps",
+    "directions", "cómo llegar", "cómo llegar desde aquí", "cómo llegar hasta aquí",
+    "directions from", "directions to", "get directions", "ver indicaciones",
+    "compartir", "share", "guardar", "save", "añadir a favoritos",
+    "send to phone", "enviar al teléfono", "llamar",
+    "suggest an edit", "sugerir una edición", "editar este lugar",
+    "add a missing place", "añadir lugar",
+    "nearby", "lugares cercanos", "cerca de aquí",
+    # Reseñas / fotos
+    "see photos", "ver fotos", "ver todas las fotos",
+    "write a review", "escribir una reseña", "añadir una reseña",
+    "add a review", "add review",
+    "more reviews", "ver más reseñas", "all reviews", "todas las reseñas",
+    "sort reviews", "ordenar reseñas", "translate review", "traducir reseña",
+    "see all reviews", "ver todas las reseñas",
+    "photos", "fotos", "overview", "resumen",
+    "menu", "menú", "about", "acerca de", "updates", "actualizaciones",
+    "questions & answers", "preguntas y respuestas",
+    # UI general de Google
+    "sign in", "iniciar sesión", "google maps",
+    "open in", "abrir en", "jina", "http", "©",
+    "terms", "términos", "privacy", "privacidad",
+    "report a problem", "informar de un problema",
+    # Nombres de pestañas comunes en páginas de negocios
+    "resumen", "opiniones", "productos", "preguntas",
+    # Frases de UI de panel lateral
+    "contraer", "expandir", "panel lateral",
+}
 
 STAR_RE = re.compile(r"\b[1-5][,.]?\d?\s*(estrellas?|stars?)\b", re.IGNORECASE)
 # Solo enteros exactos 1-5 — los ratings agregados del negocio son decimales (4.2, 3.7…)
@@ -218,14 +254,14 @@ async def _fetch_bypassing_consent(client: httpx.AsyncClient, url: str) -> tuple
 
 _PLAYWRIGHT_AVAILABLE: bool | None = None  # None = no comprobado aún
 
-async def _fetch_via_playwright(url: str) -> tuple[str, bytes | None]:
+async def _fetch_via_playwright(url: str) -> tuple[str, bytes | None, str]:
     """
     Renderiza la URL con Chromium headless real.
-    Devuelve (texto_de_la_página, screenshot_jpeg_bytes).
+    Devuelve (texto_de_la_página, screenshot_jpeg_bytes, url_final_tras_redirección).
     """
     global _PLAYWRIGHT_AVAILABLE
     if _PLAYWRIGHT_AVAILABLE is False:
-        return "", None
+        return "", None, url
 
     try:
         from playwright.async_api import async_playwright  # type: ignore
@@ -250,29 +286,26 @@ async def _fetch_via_playwright(url: str) -> tuple[str, bytes | None]:
             try:
                 await page.goto(url, wait_until="networkidle", timeout=25000)
             except Exception:
-                # networkidle puede timeout; nos quedamos con lo que cargó
                 pass
 
-            # Esperar que el contenido dinámico termine de renderizar
             await page.wait_for_timeout(2000)
 
+            final_url = page.url
             text = await page.inner_text("body")
-            screenshot = await page.screenshot(
-                full_page=False, type="jpeg", quality=80
-            )
+            screenshot = await page.screenshot(full_page=False, type="jpeg", quality=80)
             await browser.close()
 
         _PLAYWRIGHT_AVAILABLE = True
-        print(f"[playwright] OK: {len(text)} chars | {len(screenshot)} bytes screenshot", flush=True)
-        return text, screenshot
+        print(f"[playwright] OK: {len(text)} chars | final={final_url[:70]}", flush=True)
+        return text, screenshot, final_url
 
     except ImportError:
         _PLAYWRIGHT_AVAILABLE = False
         print("[playwright] No disponible (no instalado)", flush=True)
-        return "", None
+        return "", None, url
     except Exception as e:
         print(f"[playwright] Error: {e}", flush=True)
-        return "", None
+        return "", None, url
 
 
 def _classify_text(text: str, source: str) -> dict | None:
@@ -281,34 +314,32 @@ def _classify_text(text: str, source: str) -> dict | None:
 
     for phrase, label in DELETED_PHRASES:
         if phrase in text_lower:
-            return {"status": "ELIMINADA", "detail": f"{label} [{source}]",
+            return {"status": "ELIMINADA", "detail": label,
                     "evidence": [f"'{phrase}'"], "review_text": ""}
 
-    # Frases de UI de Google Maps / Jina que NO son texto de reseña
-    skip = {
-        "sign in", "open in", "jina", "http", "©", "terms", "privacy",
-        "directions from", "directions to", "get directions",
-        "search google maps", "search maps", "google maps",
-        "share", "save", "nearby", "send to phone", "suggest an edit",
-        "see photos", "write a review", "add a review", "more reviews",
-        "all reviews", "sort reviews", "translate review",
-        "photos", "overview", "menu", "about", "updates",
-    }
     bad_texts = set(t.lower() for t in _learning.get_bad_texts())
+
     review_text = ""
     for line in text.split("\n"):
         line = line.strip()
         if not line:
             continue
         line_lower = line.lower()
-        if any(s in line_lower for s in skip):
+
+        # Filtrar strings de UI de Google (exacto o contenido)
+        if line_lower in GOOGLE_UI_STRINGS:
             continue
-        # Filtrar textos que el usuario marcó como falsos positivos
+        if any(ui in line_lower for ui in GOOGLE_UI_STRINGS if len(ui) > 6):
+            continue
+        # Filtrar textos aprendidos como malos
         if line_lower in bad_texts or any(b in line_lower for b in bad_texts if len(b) > 5):
             continue
+        # Filtrar URLs y código
+        if line.startswith(("http", "//", "{", "function", "<")):
+            continue
+
         words = line.split()
         letters = sum(1 for c in line if c.isalpha())
-        # Mínimo 3 palabras y >50% letras — más permisivo que antes
         if (len(words) >= 3
                 and letters / max(len(line), 1) > 0.50
                 and all(len(w) <= 30 for w in words)):
@@ -318,10 +349,10 @@ def _classify_text(text: str, source: str) -> dict | None:
     star_m = STAR_RE.search(text_lower)
 
     if review_text:
-        return {"status": "ACTIVA", "detail": f"Texto encontrado [{source}]",
+        return {"status": "ACTIVA", "detail": "Reseña visible en la página",
                 "evidence": [f'"{review_text[:100]}"'], "review_text": review_text}
     if star_m:
-        return {"status": "ACTIVA", "detail": f"Estrellas [{source}]: '{star_m.group()}'",
+        return {"status": "ACTIVA", "detail": "Puntuación de estrellas detectada",
                 "evidence": [f"'{star_m.group()}'"], "review_text": ""}
     return None
 
@@ -484,39 +515,59 @@ async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
             rev = _extract_review_text(html)
             if rev or rating:
                 status = "ACTIVA" if rating == 5 or (rating == 0 and rev) else "ERRONEA"
-                detail = (
-                    f"Reseña de {rating}/5 — solo se validan 5 estrellas" if 0 < rating < 5
-                    else ("Texto en HTML" if rev else f"Puntuación {rating}/5 detectada")
-                )
+                if 0 < rating < 5:
+                    detail = f"Puntuación {rating}/5 — solo válidas las de 5 estrellas"
+                elif rev:
+                    detail = "Reseña visible en la página"
+                else:
+                    detail = f"Puntuación {rating}/5 detectada"
                 return {"status": status, "detail": detail,
                         "evidence": [f'"{rev[:100]}"'] if rev else [f"rating={rating}"],
                         "review_text": rev, "rating": rating, "final_url": final_url}
             star_m = STAR_RE.search(html_lower)
             if star_m:
-                return {"status": "ACTIVA", "detail": f"Estrellas: '{star_m.group()}'",
+                return {"status": "ACTIVA", "detail": "Puntuación de estrellas detectada",
                         "evidence": [f"'{star_m.group()}'"], "review_text": "", "rating": 0,
                         "final_url": final_url}
 
         # ── Capa 2: Playwright (Chromium headless) ────────────────────────────
         print(f"[check] Capa 1 sin señal → Playwright", flush=True)
-        pw_text, _capture = await _fetch_via_playwright(url)
+        pw_text, _capture, pw_final_url = await _fetch_via_playwright(url)
 
         if pw_text:
-            # 2a: clasificar el texto renderizado por Playwright
+            # 2a: detectar redirección a página de negocio (reseña eliminada)
+            # Una URL de reseña activa apunta a /maps/contrib/USER/; si redirige
+            # a /maps/place/ sin pasar por contrib, la reseña probablemente fue eliminada.
+            redirected_to_place = (
+                "/maps/place/" in pw_final_url
+                and "/maps/contrib/" not in pw_final_url
+                and "maps.app.goo.gl" not in pw_final_url
+            )
+            if redirected_to_place:
+                print(f"[check] Playwright redirigió a página de negocio → ELIMINADA", flush=True)
+                return {
+                    "status": "ELIMINADA",
+                    "detail": "Redirige a la página del negocio — reseña no encontrada",
+                    "evidence": [f"URL final: {pw_final_url[:80]}"],
+                    "review_text": "", "rating": 0,
+                    "final_url": pw_final_url,
+                    "_screenshot": _capture,
+                }
+
+            # 2b: clasificar el texto renderizado por Playwright
             res = _classify_text(pw_text, "Playwright")
             if res:
-                res["final_url"] = url
+                res["final_url"] = pw_final_url or url
                 res["rating"] = 0
                 return res
 
-            # 2b: si el texto no fue concluyente, enviar screenshot a Claude Vision
+            # 2c: si el texto no fue concluyente, enviar screenshot a Claude Vision
             if _capture:
                 print(f"[check] Playwright texto sin señal → Claude Vision", flush=True)
                 vision_res = await _check_via_vision(url, screenshot_bytes=_capture)
                 if vision_res:
-                    vision_res["final_url"] = url
+                    vision_res["final_url"] = pw_final_url or url
                     vision_res["rating"] = 0
-                    # Si Vision tampoco pudo determinar, incluir screenshot para revisión manual
                     if vision_res["status"] == "INCIERTA":
                         vision_res["_screenshot"] = _capture
                     return vision_res

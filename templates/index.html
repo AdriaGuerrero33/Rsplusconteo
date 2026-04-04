@@ -76,22 +76,47 @@
     .result-card.error-card .result-text { color:#991b1b; }
     .btn-sheet { padding:10px 18px; background:#059669; color:white; border:none; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; text-decoration:none; white-space:nowrap; transition:background .2s; }
     .btn-sheet:hover { background:#047857; }
+    /* ── Tabla de resultados ── */
     .results-table-wrap { display:none; }
     .results-table-wrap.visible { display:block; }
-    .results-table-wrap h3 { font-size:14px; font-weight:600; color:#374151; margin-bottom:10px; }
-    table { width:100%; border-collapse:collapse; font-size:13px; }
-    th { background:#f3f4f6; padding:8px 12px; text-align:left; font-weight:600; color:#374151; border-bottom:2px solid #e5e7eb; }
-    td { padding:8px 12px; border-bottom:1px solid #f3f4f6; color:#4b5563; word-break:break-all; }
-    tr:hover td { background:#f9fafb; }
-    .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700; text-transform:uppercase; }
+    .badge { display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
     .badge.ACTIVA     { background:#d1fae5; color:#065f46; }
     .badge.ELIMINADA  { background:#fee2e2; color:#991b1b; }
     .badge.INCIERTA   { background:#ffedd5; color:#9a3412; }
     .badge.DUPLICADA  { background:#ede9fe; color:#5b21b6; }
     .badge.ERRONEA    { background:#ffe4e6; color:#9f1239; }
+
+    /* Filas de resultado tipo card */
+    .result-row { border-radius:10px; margin-bottom:8px; border:1px solid #e5e7eb; overflow:hidden; transition:box-shadow .15s; }
+    .result-row:hover { box-shadow:0 2px 8px rgba(0,0,0,.08); }
+    .result-row.st-ACTIVA    { border-left:4px solid #10b981; }
+    .result-row.st-ELIMINADA { border-left:4px solid #ef4444; }
+    .result-row.st-INCIERTA  { border-left:4px solid #f59e0b; }
+    .result-row.st-DUPLICADA { border-left:4px solid #8b5cf6; }
+    .result-row.st-ERRONEA   { border-left:4px solid #f43f5e; }
+    .rr-head { display:flex; align-items:center; gap:12px; padding:10px 14px; cursor:pointer; user-select:none; }
+    .rr-num  { font-size:12px; color:#9ca3af; font-weight:600; min-width:22px; text-align:right; flex-shrink:0; }
+    .rr-url  { flex:1; font-size:12px; color:#4f46e5; text-decoration:none; word-break:break-all; min-width:0; }
+    .rr-url:hover { text-decoration:underline; }
+    .rr-badge { flex-shrink:0; }
+    .rr-stars { flex-shrink:0; font-size:12px; white-space:nowrap; }
+    .rr-toggle { flex-shrink:0; color:#9ca3af; font-size:13px; transition:transform .2s; }
+    .result-row.open .rr-toggle { transform:rotate(180deg); }
+    .rr-body { display:none; padding:0 14px 12px 48px; }
+    .result-row.open .rr-body { display:block; }
+    .rr-reason { display:flex; align-items:flex-start; gap:8px; padding:8px 12px; border-radius:8px; margin-bottom:8px; font-size:13px; }
+    .rr-reason.st-ACTIVA    { background:#f0fdf4; color:#166534; }
+    .rr-reason.st-ELIMINADA { background:#fef2f2; color:#991b1b; }
+    .rr-reason.st-INCIERTA  { background:#fffbeb; color:#92400e; }
+    .rr-reason.st-DUPLICADA { background:#f5f3ff; color:#5b21b6; }
+    .rr-reason.st-ERRONEA   { background:#fff1f2; color:#9f1239; }
+    .rr-reason-icon { font-size:15px; flex-shrink:0; margin-top:1px; }
+    .rr-review-text { font-size:12px; color:#374151; font-style:italic; background:#f9fafb; border-left:3px solid #d1d5db; padding:6px 10px; border-radius:0 6px 6px 0; margin-bottom:6px; }
+    .rr-actions { display:flex; align-items:center; gap:8px; }
+    .rr-correct-btn { padding:4px 10px; border:1px solid #e5e7eb; border-radius:6px; background:white; font-size:11px; color:#6b7280; cursor:pointer; transition:border-color .15s; }
+    .rr-correct-btn:hover { border-color:#4f46e5; color:#4f46e5; }
     .log-line.duplicada .log-text { color:#a78bfa; }
     .log-line.erronea   .log-text { color:#fb7185; }
-    .evidence-list { font-size:11px; color:#9ca3af; margin-top:2px; }
     @media(max-width:560px){ .counters{grid-template-columns:repeat(2,1fr)} .input-row{flex-direction:column} }
 
     /* ── Botones resultado ── */
@@ -205,14 +230,14 @@
   </div>
 
   <div class="card results-table-wrap" id="results-table-wrap">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
-      <h3 style="margin:0">Resultados detallados</h3>
-      <span id="learning-stats" style="display:none;font-size:12px;color:#6b7280;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:999px;padding:4px 12px"></span>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0;font-size:15px;font-weight:700;color:#1a1a2e">Resultados detallados</h3>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span id="learning-stats" style="display:none;font-size:12px;color:#059669;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:999px;padding:3px 10px"></span>
+        <span style="font-size:12px;color:#9ca3af">Haz clic en una fila para ver detalles · ✏️ para corregir</span>
+      </div>
     </div>
-    <table>
-      <thead><tr><th>#</th><th>URL</th><th>Estado</th><th>⭐ Estrellas</th><th>Texto de reseña</th><th>Motivo</th><th></th></tr></thead>
-      <tbody id="results-tbody"></tbody>
-    </table>
+    <div id="results-list"></div>
   </div>
 </div>
 
@@ -505,43 +530,118 @@
     _showReportBtn();
   }
 
+  // ── Helpers de motivo ───────────────────────────────────────────────────────
+  const STATUS_ICONS = {
+    ACTIVA:"✓", ELIMINADA:"✗", INCIERTA:"?", DUPLICADA:"⬡", ERRONEA:"⚠"
+  };
+  const STATUS_LABELS = {
+    ACTIVA:"Activa", ELIMINADA:"Eliminada", INCIERTA:"Incierta",
+    DUPLICADA:"Duplicada", ERRONEA:"Errónea"
+  };
+
+  function friendlyDetail(row) {
+    const d = row.detail || "";
+    const st = row.status;
+    if (st === "ACTIVA") {
+      if (row.review_text) return "Reseña activa con texto visible";
+      if (d.includes("estrellas") || d.includes("stars") || d.includes("star"))
+        return "Puntuación de estrellas detectada";
+      return "Reseña activa detectada";
+    }
+    if (st === "ELIMINADA") {
+      if (d.includes("negocio") || d.includes("place"))
+        return "La URL redirige al negocio — la reseña no existe";
+      if (d.includes("no longer") || d.includes("ya no") || d.includes("no disponible"))
+        return "Google confirma que la reseña ya no está disponible";
+      return "Reseña eliminada";
+    }
+    if (st === "DUPLICADA") {
+      const m = d.match(/#(\d+)/);
+      if (d.includes("URL")) return `URL idéntica a la reseña #${m?.[1]||"?"}`;
+      return `Texto idéntico a la reseña #${m?.[1]||"?"}`;
+    }
+    if (st === "ERRONEA") {
+      const m = d.match(/(\d+)\/5/);
+      return m ? `Reseña de ${m[1]}/5 — solo válidas las de 5 estrellas` : "Puntuación insuficiente";
+    }
+    if (st === "INCIERTA") {
+      if (d.includes("Timeout")) return "Tiempo de espera agotado";
+      if (d.includes("Vision")) return "No fue posible determinar el estado con la IA";
+      return "No se pudo verificar el estado";
+    }
+    return d || "Sin información";
+  }
+
+  function renderResults() {
+    const list = document.getElementById("results-list");
+    list.innerHTML = "";
+    _allResults.forEach((row, i) => {
+      const st = row.status;
+      const icon = STATUS_ICONS[st] || "?";
+      const label = STATUS_LABELS[st] || st;
+      const detail = friendlyDetail(row);
+      const r = row.rating || 0;
+      const starsStr = r
+        ? "⭐".repeat(Math.min(r,5)) + (r < 5 ? ` ⚠ ${r}/5` : ` ${r}/5`)
+        : "";
+
+      const div = document.createElement("div");
+      div.className = `result-row st-${st}`;
+      div.id = `rrow-${i}`;
+
+      // Cabecera (siempre visible)
+      const head = document.createElement("div");
+      head.className = "rr-head";
+      head.innerHTML =
+        `<span class="rr-num">${i+1}</span>`+
+        `<a class="rr-url" href="${escapeHtml(row.url)}" target="_blank" onclick="event.stopPropagation()">`+
+          `${escapeHtml(row.url)}</a>`+
+        `<span class="rr-badge"><span class="badge ${st}" id="badge-row-${i}">${icon} ${label}</span></span>`+
+        (starsStr ? `<span class="rr-stars">${escapeHtml(starsStr)}</span>` : "")+
+        `<span class="rr-toggle">▼</span>`;
+      head.addEventListener("click", () => toggleRow(i));
+
+      // Cuerpo expandible
+      const body = document.createElement("div");
+      body.className = "rr-body";
+      let bodyHtml =
+        `<div class="rr-reason st-${st}">`+
+          `<span class="rr-reason-icon">${icon}</span>`+
+          `<span><strong>${label}:</strong> ${escapeHtml(detail)}</span>`+
+        `</div>`;
+      if (row.review_text) {
+        bodyHtml +=
+          `<div class="rr-review-text">"${escapeHtml(row.review_text.slice(0,300))}"</div>`;
+      }
+      bodyHtml +=
+        `<div class="rr-actions">`+
+          `<button class="rr-correct-btn" onclick="quickCorrect(${i}, this)">✏️ Corregir clasificación</button>`+
+        `</div>`;
+      body.innerHTML = bodyHtml;
+
+      div.appendChild(head);
+      div.appendChild(body);
+      list.appendChild(div);
+    });
+  }
+
+  function toggleRow(i) {
+    const div = document.getElementById(`rrow-${i}`);
+    if (div) div.classList.toggle("open");
+  }
+
   function showResultDirect(data) {
     const card = document.getElementById("result-card");
     card.classList.add("visible");
+    const c = data.counters;
     document.getElementById("result-text").textContent =
-      `Listo. ${data.counters.activas} activas · ${data.counters.eliminadas} eliminadas · ${data.counters.inciertas} inciertas.`;
+      `Listo — ${c.activas} activas · ${c.eliminadas} eliminadas · `+
+      `${c.duplicadas||0} duplicadas · ${c.inciertas} inciertas · ${c.erroneas||0} erróneas.`;
     document.getElementById("result-link").style.display = "none";
     _showReportBtn();
 
-    const tbody = document.getElementById("results-tbody");
-    tbody.innerHTML = "";
-    _allResults.forEach((row, i) => {
-      const tr  = document.createElement("tr");
-      const reviewHtml = row.review_text
-        ? `<span style="color:#374151">${escapeHtml(row.review_text)}</span>`
-        : `<span style="color:#9ca3af;font-style:italic">${row.status==="ELIMINADA"?"—":"sin texto"}</span>`;
-      const ev = row.evidence && row.evidence.length
-        ? `<div class="evidence-list">${escapeHtml(row.evidence.join(" | "))}</div>` : "";
-      // Estrellas
-      const r = row.rating || 0;
-      const starsHtml = r
-        ? `<span style="font-size:14px">${"⭐".repeat(r)}</span>`
-          + (r < 5 ? `<span style="color:#d97706;font-size:11px;font-weight:600;margin-left:4px">⚠ ${r}/5</span>` : `<span style="color:#059669;font-size:11px;margin-left:4px">${r}/5</span>`)
-        : `<span style="color:#9ca3af;font-size:11px">—</span>`;
-      tr.dataset.resultIdx = i;
-      tr.innerHTML =
-        `<td>${i+1}</td>`+
-        `<td><a href="${escapeHtml(row.url)}" target="_blank" style="color:#4f46e5">${escapeHtml(row.url)}</a></td>`+
-        `<td><span class="badge ${row.status}" id="badge-row-${i}">${row.status}</span></td>`+
-        `<td style="white-space:nowrap">${starsHtml}</td>`+
-        `<td style="max-width:220px;font-size:12px">${reviewHtml}</td>`+
-        `<td>${escapeHtml(row.detail||"")}${ev}</td>`+
-        `<td><button onclick="quickCorrect(${i}, this)" title="Corregir clasificación" `+
-        `style="background:none;border:1px solid #e5e7eb;border-radius:6px;padding:2px 7px;cursor:pointer;font-size:12px;color:#6b7280">✏️</button></td>`;
-      tbody.appendChild(tr);
-    });
+    renderResults();
     document.getElementById("results-table-wrap").classList.add("visible");
-    // Cargar estadísticas de aprendizaje
     fetch("/learning-stats").then(r=>r.json()).then(_updateLearningBadge).catch(()=>{});
   }
 
@@ -575,7 +675,7 @@
     document.getElementById("result-card").classList.remove("visible","error-card");
     document.getElementById("result-link").style.display = "";
     document.getElementById("results-table-wrap").classList.remove("visible");
-    document.getElementById("results-tbody").innerHTML = "";
+    document.getElementById("results-list").innerHTML = "";
     document.getElementById("progress-section").classList.remove("visible");
     document.getElementById("btn-report").style.display = "none";
     document.getElementById("btn-review").style.display = "none";
@@ -754,9 +854,14 @@
           _updateCounter(s, +1);
           row.status = s;
           row.detail = `Corregido manualmente → ${s}`;
-          // Actualizar badge en la tabla
-          const badge = document.getElementById(`badge-row-${idx}`);
-          if (badge) { badge.className = `badge ${s}`; badge.textContent = s; }
+          // Re-renderizar la fila con el nuevo estado
+          const oldRow = document.getElementById(`rrow-${idx}`);
+          const wasOpen = oldRow && oldRow.classList.contains("open");
+          renderResults();
+          if (wasOpen) {
+            const newRow = document.getElementById(`rrow-${idx}`);
+            if (newRow) newRow.classList.add("open");
+          }
         }
         popup.remove();
       };
