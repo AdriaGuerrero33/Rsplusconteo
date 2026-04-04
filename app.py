@@ -292,6 +292,9 @@ async def job_status(job_id: str, since: int = 0):
         "sheet_url":   job.sheet_url,
         "results_tab": job.results_tab,
         "job_id":      job_id,
+        # Cuando el job termina, enviar la lista completa con estados definitivos
+        # (incluyendo cambios de _mark_duplicates que ocurren post-streaming)
+        "all_results": job.results if job.done else None,
     }
 
 

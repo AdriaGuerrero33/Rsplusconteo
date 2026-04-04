@@ -419,6 +419,18 @@
 
       // Terminado
       if (data.done) {
+        // Reemplazar _allResults con la lista definitiva del servidor
+        // (incluye cambios de _mark_duplicates que ocurren tras el streaming)
+        if (data.all_results && data.all_results.length > 0) {
+          _allResults = data.all_results;
+          // Sincronizar contadores con los valores definitivos
+          document.getElementById("cnt-activas").textContent    = data.counters.activas;
+          document.getElementById("cnt-eliminadas").textContent = data.counters.eliminadas;
+          document.getElementById("cnt-inciertas").textContent  = data.counters.inciertas;
+          document.getElementById("cnt-duplicadas").textContent = data.counters.duplicadas || 0;
+          document.getElementById("cnt-erroneas").textContent   = data.counters.erroneas   || 0;
+          document.getElementById("cnt-total").textContent      = data.total;
+        }
         updateProgress(data.total, data.total);
         document.getElementById("progress-label").textContent = "¡Verificación completada!";
         if (mode === "direct") showResultDirect(data);
