@@ -93,6 +93,40 @@
     .log-line.erronea   .log-text { color:#fb7185; }
     .evidence-list { font-size:11px; color:#9ca3af; margin-top:2px; }
     @media(max-width:560px){ .counters{grid-template-columns:repeat(2,1fr)} .input-row{flex-direction:column} }
+
+    /* ── Botón informe ── */
+    .btn-report { padding:10px 18px; background:#4f46e5; color:white; border:none; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap; transition:background .2s; }
+    .btn-report:hover { background:#4338ca; }
+
+    /* ── Modal ── */
+    .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:1000; align-items:flex-start; justify-content:center; padding:24px 16px; overflow-y:auto; }
+    .modal-overlay.open { display:flex; }
+    .modal { background:white; border-radius:16px; width:100%; max-width:1000px; box-shadow:0 8px 40px rgba(0,0,0,0.25); display:flex; flex-direction:column; max-height:90vh; }
+    .modal-header { padding:20px 24px 16px; border-bottom:1px solid #e5e7eb; display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
+    .modal-header h2 { font-size:16px; font-weight:700; color:#1a1a2e; }
+    .modal-header p  { font-size:12px; color:#6b7280; margin-top:2px; }
+    .modal-close { background:none; border:none; font-size:22px; cursor:pointer; color:#9ca3af; line-height:1; padding:0 4px; }
+    .modal-close:hover { color:#374151; }
+    .modal-body { overflow-y:auto; padding:0; flex:1; }
+    .modal-footer { padding:16px 24px; border-top:1px solid #e5e7eb; display:flex; align-items:center; justify-content:space-between; flex-shrink:0; gap:12px; flex-wrap:wrap; }
+    .modal-footer .footer-info { font-size:13px; color:#6b7280; }
+    .modal-footer .footer-btns { display:flex; gap:10px; }
+    .btn-csv  { padding:10px 20px; background:#059669; color:white; border:none; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; transition:background .2s; }
+    .btn-csv:hover { background:#047857; }
+    .btn-cancel { padding:10px 18px; background:#f3f4f6; color:#374151; border:none; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; transition:background .2s; }
+    .btn-cancel:hover { background:#e5e7eb; }
+
+    /* Tabla del modal */
+    .modal-table { width:100%; border-collapse:collapse; font-size:13px; }
+    .modal-table th { background:#f9fafb; padding:10px 12px; text-align:left; font-weight:600; color:#374151; border-bottom:2px solid #e5e7eb; position:sticky; top:0; z-index:1; }
+    .modal-table td { padding:9px 12px; border-bottom:1px solid #f3f4f6; color:#4b5563; vertical-align:top; }
+    .modal-table tr:hover td { background:#f9fafb; }
+    .status-select { padding:4px 8px; border:1px solid #d1d5db; border-radius:6px; font-size:12px; font-weight:600; cursor:pointer; outline:none; }
+    .status-select.ACTIVA    { background:#d1fae5; color:#065f46; border-color:#6ee7b7; }
+    .status-select.ELIMINADA { background:#fee2e2; color:#991b1b; border-color:#fca5a5; }
+    .status-select.INCIERTA  { background:#ffedd5; color:#9a3412; border-color:#fdba74; }
+    .status-select.DUPLICADA { background:#ede9fe; color:#5b21b6; border-color:#c4b5fd; }
+    .status-select.ERRONEA   { background:#ffe4e6; color:#9f1239; border-color:#fda4af; }
   </style>
 </head>
 <body>
@@ -157,7 +191,10 @@
 
   <div class="result-card" id="result-card">
     <span class="result-text" id="result-text"></span>
-    <a class="btn-sheet" id="result-link" href="#" target="_blank">Ver en Google Sheets →</a>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button class="btn-report" id="btn-report" onclick="openReportEditor()" style="display:none">📊 Editar y Descargar Informe</button>
+      <a class="btn-sheet" id="result-link" href="#" target="_blank">Ver en Google Sheets →</a>
+    </div>
   </div>
 
   <div class="card results-table-wrap" id="results-table-wrap">
@@ -166,6 +203,39 @@
       <thead><tr><th>#</th><th>URL</th><th>Estado</th><th>⭐ Estrellas</th><th>Texto de reseña</th><th>Motivo</th></tr></thead>
       <tbody id="results-tbody"></tbody>
     </table>
+  </div>
+</div>
+
+<!-- ── Modal informe editable ─────────────────────────────────────── -->
+<div class="modal-overlay" id="report-modal" onclick="closeModalOnOverlay(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h2>Informe de reseñas</h2>
+        <p>Cambia el estado de cualquier fila antes de exportar.</p>
+      </div>
+      <button class="modal-close" onclick="closeReportEditor()">×</button>
+    </div>
+    <div class="modal-body">
+      <table class="modal-table">
+        <thead><tr>
+          <th style="width:36px">#</th>
+          <th>URL</th>
+          <th style="width:145px">Estado</th>
+          <th style="width:90px">⭐ Estrellas</th>
+          <th style="min-width:180px">Texto de reseña</th>
+          <th>Motivo</th>
+        </tr></thead>
+        <tbody id="report-tbody"></tbody>
+      </table>
+    </div>
+    <div class="modal-footer">
+      <span class="footer-info" id="report-footer-info"></span>
+      <div class="footer-btns">
+        <button class="btn-cancel" onclick="closeReportEditor()">Cerrar</button>
+        <button class="btn-csv" onclick="downloadCSV()">⬇ Descargar CSV</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -340,6 +410,10 @@
     box.scrollTop = box.scrollHeight;
   }
 
+  function _showReportBtn() {
+    document.getElementById("btn-report").style.display = "";
+  }
+
   function showResultSheet(data) {
     const card = document.getElementById("result-card");
     card.classList.add("visible");
@@ -349,6 +423,7 @@
     const link = document.getElementById("result-link");
     if (data.sheet_url) { link.href = data.sheet_url; link.style.display=""; }
     else link.style.display = "none";
+    _showReportBtn();
   }
 
   function showResultDirect(data) {
@@ -357,6 +432,7 @@
     document.getElementById("result-text").textContent =
       `Listo. ${data.counters.activas} activas · ${data.counters.eliminadas} eliminadas · ${data.counters.inciertas} inciertas.`;
     document.getElementById("result-link").style.display = "none";
+    _showReportBtn();
 
     const tbody = document.getElementById("results-tbody");
     tbody.innerHTML = "";
@@ -417,6 +493,7 @@
     document.getElementById("results-table-wrap").classList.remove("visible");
     document.getElementById("results-tbody").innerHTML = "";
     document.getElementById("progress-section").classList.remove("visible");
+    document.getElementById("btn-report").style.display = "none";
   }
 
   function setButtonsDisabled(val) {
@@ -428,6 +505,101 @@
     return String(text)
       .replace(/&/g,"&amp;").replace(/</g,"&lt;")
       .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+
+  // ── Informe editable ────────────────────────────────────────────────────────
+  const STATUSES = ["ACTIVA","ELIMINADA","INCIERTA","DUPLICADA","ERRONEA"];
+
+  function openReportEditor() {
+    const tbody = document.getElementById("report-tbody");
+    tbody.innerHTML = "";
+
+    _allResults.forEach((row, i) => {
+      const tr = document.createElement("tr");
+      tr.dataset.idx = i;
+
+      // Select de estado con colores dinámicos
+      const sel = document.createElement("select");
+      sel.className = "status-select " + row.status;
+      STATUSES.forEach(s => {
+        const opt = document.createElement("option");
+        opt.value = s; opt.textContent = s;
+        if (s === row.status) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      sel.addEventListener("change", function() {
+        this.className = "status-select " + this.value;
+        _allResults[i].status = this.value;
+        updateFooterInfo();
+      });
+
+      const r = row.rating || 0;
+      const starsText = r ? "⭐".repeat(r) + ` ${r}/5` : "—";
+      const reviewText = row.review_text || "";
+
+      tr.innerHTML =
+        `<td style="color:#6b7280">${i+1}</td>`+
+        `<td><a href="${escapeHtml(row.url)}" target="_blank" style="color:#4f46e5;font-size:12px;word-break:break-all">${escapeHtml(row.url)}</a></td>`+
+        `<td></td>`+
+        `<td style="white-space:nowrap;font-size:12px">${escapeHtml(starsText)}</td>`+
+        `<td style="font-size:12px;color:#374151;max-width:200px">${escapeHtml(reviewText)||'<span style="color:#9ca3af;font-style:italic">sin texto</span>'}</td>`+
+        `<td style="font-size:12px;color:#6b7280">${escapeHtml(row.detail||"")}</td>`;
+      // Insert select into the td
+      tr.cells[2].appendChild(sel);
+      tbody.appendChild(tr);
+    });
+
+    updateFooterInfo();
+    document.getElementById("report-modal").classList.add("open");
+    document.body.style.overflow = "hidden";
+  }
+
+  function updateFooterInfo() {
+    const counts = {};
+    STATUSES.forEach(s => counts[s] = 0);
+    _allResults.forEach(r => { if (counts[r.status] !== undefined) counts[r.status]++; });
+    document.getElementById("report-footer-info").textContent =
+      `${_allResults.length} reseñas · ${counts.ACTIVA} activas · ${counts.ELIMINADA} eliminadas · ${counts.INCIERTA} inciertas · ${counts.DUPLICADA} duplicadas · ${counts.ERRONEA} erróneas`;
+  }
+
+  function closeReportEditor() {
+    document.getElementById("report-modal").classList.remove("open");
+    document.body.style.overflow = "";
+  }
+
+  function closeModalOnOverlay(e) {
+    if (e.target === document.getElementById("report-modal")) closeReportEditor();
+  }
+
+  function downloadCSV() {
+    const cols = ["#","URL","Estado","Estrellas","Texto de reseña","Motivo"];
+    const csvRows = [cols.map(csvCell).join(",")];
+    _allResults.forEach((row, i) => {
+      csvRows.push([
+        i + 1,
+        row.url,
+        row.status,
+        row.rating ? row.rating + "/5" : "",
+        row.review_text || "",
+        row.detail || "",
+      ].map(csvCell).join(","));
+    });
+    const bom = "\uFEFF"; // UTF-8 BOM para que Excel abra correctamente
+    const blob = new Blob([bom + csvRows.join("\r\n")], {type:"text/csv;charset=utf-8;"});
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    const date = new Date().toISOString().slice(0,10);
+    a.href = url; a.download = `informe_resenas_${date}.csv`;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+  }
+
+  function csvCell(val) {
+    const s = String(val ?? "");
+    if (s.includes(",") || s.includes('"') || s.includes("\n") || s.includes("\r")) {
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
   }
 </script>
 </body>
