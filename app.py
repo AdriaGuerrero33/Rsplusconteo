@@ -57,36 +57,50 @@ def _count(counters: dict, status: str) -> None:
 
 def _mark_duplicates(job: "JobState") -> None:
     """
-    Tras completar la verificación, detecta textos de reseña repetidos.
-    Si dos o más reseñas comparten el mismo texto, todas se marcan DUPLICADA.
-    Solo se comparan textos con ≥6 palabras para evitar falsos positivos
-    con nombres de negocio o frases genéricas muy cortas.
+    Detecta textos de reseña muy similares (≥95%) tras completar la verificación.
+    El primero del grupo permanece ACTIVA; los posteriores se marcan DUPLICADA
+    con referencia a la reseña original.
+    Solo compara textos con ≥6 palabras y descarta nombres de negocio.
     """
     import re as _re
-    from collections import defaultdict
+    from difflib import SequenceMatcher
+
     _biz = _re.compile(r'^[A-ZÁÉÍÓÚÑ][^a-záéíóúñ]{2,}\s*[-–—]', _re.UNICODE)
-    groups: dict[str, list[int]] = defaultdict(list)
+
+    def _norm(t: str) -> str:
+        return " ".join(t.lower().split())
+
+    # Recoger candidatos (índice → texto normalizado)
+    candidates: list[tuple[int, str]] = []
     for i, r in enumerate(job.results):
         text = (r.get("review_text") or "").strip()
-        # Ignorar textos cortos o que parezcan nombres de negocio
         if not text or len(text.split()) < 6 or _biz.match(text):
             continue
-        groups[text].append(i)
+        candidates.append((i, _norm(text)))
 
-    for text, indices in groups.items():
-        if len(indices) < 2:
-            continue
-        for i in indices:
-            old_status = job.results[i]["status"]
-            if old_status == "ACTIVA":
-                job.counters["activas"] -= 1
-            # Marcar como duplicada
-            job.results[i]["status"] = "DUPLICADA"
-            job.results[i]["detail"] = (
-                f"Texto idéntico a reseñas: "
-                + ", ".join(f"#{j+1}" for j in indices if j != i)
-            )
-            job.counters["duplicadas"] += 1
+    # Comparar pares: O(n²) pero lista corta en la práctica
+    duplicate_of: dict[int, int] = {}  # índice duplicado → índice original
+    for a in range(len(candidates)):
+        idx_a, txt_a = candidates[a]
+        if idx_a in duplicate_of:
+            continue  # ya marcado como duplicado
+        for b in range(a + 1, len(candidates)):
+            idx_b, txt_b = candidates[b]
+            if idx_b in duplicate_of:
+                continue
+            ratio = SequenceMatcher(None, txt_a, txt_b).ratio()
+            if ratio >= 0.95:
+                duplicate_of[idx_b] = idx_a  # b es duplicado de a
+
+    for dup_idx, orig_idx in duplicate_of.items():
+        old_status = job.results[dup_idx]["status"]
+        if old_status == "ACTIVA":
+            job.counters["activas"] -= 1
+        elif old_status == "ERRONEA":
+            job.counters["erroneas"] -= 1
+        job.results[dup_idx]["status"] = "DUPLICADA"
+        job.results[dup_idx]["detail"] = f"Texto idéntico a reseña #{orig_idx + 1}"
+        job.counters["duplicadas"] += 1
 
 
 # ── Trabajos en background ────────────────────────────────────────────────────
