@@ -64,29 +64,35 @@ def _store_result(job: "JobState", result: dict, contact_name: str = "") -> None
     """
     Almacena un resultado en el job, aplicando:
     - detección de conflicto entre contactos (misma URL enviada por personas distintas)
+    - detección de conflicto por texto similar entre contactos distintos
     - guardado de screenshot si la reseña es INCIERTA
     """
-    status = result.get("status", "INCIERTA")
-    url    = result.get("url", "")
+    status      = result.get("status", "INCIERTA")
+    url         = result.get("url", "")
+    review_text = result.get("review_text", "")
 
     # ── Detección de conflicto entre contactos ────────────────────────────────
     conflict_submitters: list[dict] = []
+    match_type = "url"
+
     if contact_name and url:
-        conflict_submitters = _contacts.record_submission(url, contact_name)
+        # 1. Conflicto por URL idéntica
+        conflict_submitters = _contacts.record_submission(url, contact_name, review_text)
+
+        # 2. Conflicto por texto similar (URLs distintas, misma reseña)
+        if not conflict_submitters and review_text:
+            text_conflicts = _contacts.find_text_conflicts(review_text, contact_name)
+            if text_conflicts:
+                conflict_submitters = text_conflicts
+                match_type = "text"
 
     if conflict_submitters:
-        # Otra persona ya envió esta misma URL → ERRONEA con motivo detallado
-        note = _contacts.conflict_note(conflict_submitters)
-        # Descontar el estado original antes de cambiar
-        if status != "ERRONEA":
-            status = "ERRONEA"
+        note = _contacts.conflict_note(conflict_submitters, match_type=match_type)
+        status = "ERRONEA"
         result["status"] = "ERRONEA"
         result["detail"] = note
         result["contact_conflict"] = True
         result["conflict_submitters"] = conflict_submitters
-    elif contact_name and url:
-        # Primer envío de esta URL por este contacto: registrar sin conflicto
-        pass
 
     _count(job.counters, status)
 
