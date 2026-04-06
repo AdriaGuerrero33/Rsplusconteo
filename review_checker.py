@@ -276,10 +276,10 @@ async def _create_browser():
     return ctx, browser
 
 
-async def _fetch_page(url: str, browser) -> tuple[str, bytes | None, str]:
+async def _fetch_page(url: str, browser) -> tuple[str, bytes | None, str, str]:
     """
     Abre una nueva página en el browser dado, navega a url y devuelve
-    (texto, screenshot_jpeg, url_final).
+    (texto, screenshot_jpeg, url_final, html_completo).
     Cierra el contexto (no el browser) al terminar.
     """
     context = await browser.new_context(
@@ -295,24 +295,59 @@ async def _fetch_page(url: str, browser) -> tuple[str, bytes | None, str]:
             # networkidle puede fallar por timeout; la página suele estar suficientemente cargada
             pass
 
-        final_url = page.url
-        text      = await page.inner_text("body")
+        final_url  = page.url
+        text       = await page.inner_text("body")
+        html       = await page.content()           # HTML completo renderizado
         screenshot = await page.screenshot(full_page=False, type="jpeg", quality=80)
         print(f"[playwright] OK: {len(text)} chars | final={final_url[:70]}", flush=True)
-        return text, screenshot, final_url
+        return text, screenshot, final_url, html
     finally:
         await context.close()
 
 
-async def _fetch_via_playwright(url: str, browser=None) -> tuple[str, bytes | None, str]:
+# Detecta el rating en aria-labels de Google Maps renderizados por Playwright
+# Ejemplos: aria-label="Puntuación: 4 de 5 estrellas"  aria-label="Rated 3 out of 5"
+_ARIA_RATING_RE = re.compile(
+    r'aria-label="[^"]*?(?:[Pp]untuaci[oó]n|[Rr]ated?|[Cc]alificaci[oó]n)[^"]*?'
+    r'([1-5])(?:[,.]0)?\s*(?:de\s*5|out\s+of\s*5|\/5)?[^"]*?"',
+    re.IGNORECASE,
+)
+# También detecta atributos data-rating="4" que usa Google en algunos contextos
+_DATA_RATING_RE = re.compile(r'data-(?:rating|value)="([1-5])(?:[.,]0)?"', re.IGNORECASE)
+
+
+def _extract_aria_rating(html: str) -> int:
+    """Extrae rating de atributos aria-label o data-rating del HTML renderizado."""
+    m = _ARIA_RATING_RE.search(html)
+    if m:
+        try:
+            n = int(m.group(1))
+            if 1 <= n <= 5:
+                print(f"[playwright] aria-label rating={n}", flush=True)
+                return n
+        except (ValueError, TypeError):
+            pass
+    m = _DATA_RATING_RE.search(html)
+    if m:
+        try:
+            n = int(m.group(1))
+            if 1 <= n <= 5:
+                print(f"[playwright] data-rating={n}", flush=True)
+                return n
+        except (ValueError, TypeError):
+            pass
+    return 0
+
+
+async def _fetch_via_playwright(url: str, browser=None) -> tuple[str, bytes | None, str, str]:
     """
     Renderiza la URL con Chromium headless real.
     Si se pasa `browser`, lo reutiliza (pool). Si no, crea uno temporal.
-    Devuelve (texto_de_la_página, screenshot_jpeg_bytes, url_final_tras_redirección).
+    Devuelve (texto, screenshot_jpeg, url_final, html_completo).
     """
     global _PLAYWRIGHT_AVAILABLE
     if _PLAYWRIGHT_AVAILABLE is False:
-        return "", None, url
+        return "", None, url, ""
 
     _own_browser = browser is None
     _ctx = None
@@ -321,17 +356,17 @@ async def _fetch_via_playwright(url: str, browser=None) -> tuple[str, bytes | No
             from playwright.async_api import async_playwright  # type: ignore  # noqa
             _ctx, browser = await _create_browser()
 
-        text, screenshot, final_url = await _fetch_page(url, browser)
+        text, screenshot, final_url, html = await _fetch_page(url, browser)
         _PLAYWRIGHT_AVAILABLE = True
-        return text, screenshot, final_url
+        return text, screenshot, final_url, html
 
     except ImportError:
         _PLAYWRIGHT_AVAILABLE = False
         print("[playwright] No disponible (no instalado)", flush=True)
-        return "", None, url
+        return "", None, url, ""
     except Exception as e:
         print(f"[playwright] Error: {e}", flush=True)
-        return "", None, url
+        return "", None, url, ""
     finally:
         if _own_browser:
             if browser:
@@ -426,30 +461,29 @@ def _classify_text(text: str, source: str) -> dict | None:
 # ─── Capa 3: Claude Vision ────────────────────────────────────────────────────
 
 _VISION_PROMPT = """\
-This is a screenshot of a Google Maps review URL.
+This is a screenshot of a Google Maps review page. Your job has TWO parts:
 
-Your task: decide if the specific user review is still ACTIVE, has been DELETED, or is INVALID due to low star rating.
+PART 1 — COUNT THE STARS:
+Look for the star rating row next to the review. Count filled (yellow/orange) stars carefully.
+- 5 filled stars = 5
+- 4 filled stars = 4
+- 3 filled stars = 3
+- etc.
+If you cannot see any stars at all, set rating to 0.
 
-Classification:
-- ACTIVA   → You can see a real user-written review with 5 stars.
-             A user profile page showing their 5-star review counts as ACTIVA.
-- ERRONEA  → The review is visible BUT it has 1, 2, 3, or 4 stars (NOT 5 stars).
-             Look carefully at the star icons next to the review — count filled stars.
-             Only 5-star reviews are valid. If you see fewer than 5 stars → ERRONEA.
-- ELIMINADA → The page explicitly shows a deletion notice:
-              "no longer available", "review not found", "has been removed", etc.
-              OR the URL redirected to a generic place/business page (address, hours, photos)
-              with NO specific review text visible.
-- INCIERTA  → Only if: cookie/consent wall is blocking the view, blank page, 404 error,
-              or you genuinely cannot determine.
+PART 2 — CLASSIFY:
+- ACTIVA    → Review is visible AND has exactly 5 stars.
+- ERRONEA   → Review is visible BUT has 1, 2, 3, or 4 stars. Only 5-star reviews are valid.
+- ELIMINADA → Page shows a deletion notice ("no longer available", "ya no está disponible",
+              "review not found", "has been removed") OR the page is a generic business
+              overview (address, hours, photos) with NO specific user review text visible.
+- INCIERTA  → Cookie wall blocking, blank page, 404, or genuinely impossible to determine.
 
-Key signal: if the page shows a PLACE (restaurant, hotel, shop) with overview/photos/hours
-but NO specific review by a single user → that usually means the review was DELETED (ELIMINADA).
+CRITICAL: If you see review text + stars that are NOT all filled → ERRONEA.
+A place overview page (not showing a specific user review) → ELIMINADA.
 
-IMPORTANT: Always check the star rating of the visible review. Count filled/colored stars carefully.
-
-Reply ONLY with valid JSON (no markdown, no extra text):
-{"status":"ACTIVA|ERRONEA|ELIMINADA|INCIERTA","review_text":"the review text you can read or empty","rating":5,"reason":"one-line explanation"}"""
+Reply ONLY with valid JSON, no markdown:
+{"status":"ACTIVA|ERRONEA|ELIMINADA|INCIERTA","rating":5,"review_text":"text or empty","reason":"brief explanation"}"""
 
 
 async def _check_via_vision(
@@ -623,12 +657,10 @@ async def _check_single_review(client: httpx.AsyncClient, url: str, browser=None
 
         # ── Capa 2: Playwright (Chromium headless) ────────────────────────────
         print(f"[check] Capa 1 sin señal → Playwright", flush=True)
-        pw_text, _capture, pw_final_url = await _fetch_via_playwright(url, browser=browser)
+        pw_text, _capture, pw_final_url, pw_html = await _fetch_via_playwright(url, browser=browser)
 
         if pw_text:
             # 2a: detectar redirección a página de negocio (reseña eliminada)
-            # Una URL de reseña activa apunta a /maps/contrib/USER/; si redirige
-            # a /maps/place/ sin pasar por contrib, la reseña probablemente fue eliminada.
             redirected_to_place = (
                 "/maps/place/" in pw_final_url
                 and "/maps/contrib/" not in pw_final_url
@@ -645,21 +677,50 @@ async def _check_single_review(client: httpx.AsyncClient, url: str, browser=None
                     "_screenshot": _capture,
                 }
 
-            # 2b: clasificar el texto renderizado por Playwright
+            # 2b: extraer rating de aria-labels del HTML renderizado
+            # (las estrellas de Google Maps son SVG — no aparecen en inner_text)
+            aria_rating = _extract_aria_rating(pw_html) if pw_html else 0
+
+            # 2c: clasificar el texto renderizado por Playwright
             res = _classify_text(pw_text, "Playwright")
             if res:
                 res["final_url"] = pw_final_url or url
-                res.setdefault("rating", 0)  # no sobreescribir rating ya detectado
+                res.setdefault("rating", 0)
+
+                # Aplicar aria_rating si el texto no lo detectó
+                if aria_rating and res.get("rating", 0) == 0:
+                    res["rating"] = aria_rating
+                    if 0 < aria_rating < 5:
+                        res["status"] = "ERRONEA"
+                        res["detail"] = f"Puntuación {aria_rating}/5 — solo se validan las de 5 estrellas"
+
+                # Si el resultado es ACTIVA pero aún no tenemos rating, llamar Vision
+                # para verificar las estrellas (son visuales, no siempre en texto)
+                if res["status"] == "ACTIVA" and res.get("rating", 0) == 0 and _capture:
+                    print(f"[check] ACTIVA sin rating → verificando estrellas con Vision", flush=True)
+                    vision_res = await _check_via_vision(url, screenshot_bytes=_capture)
+                    if vision_res:
+                        v_rating = vision_res.get("rating", 0)
+                        v_status = vision_res.get("status", "")
+                        if v_status == "ERRONEA" or (0 < v_rating < 5):
+                            res["status"]  = "ERRONEA"
+                            res["detail"]  = vision_res.get("detail") or f"Puntuación {v_rating}/5 — solo se validan las de 5 estrellas"
+                            res["rating"]  = v_rating
+                        elif v_status in ("ACTIVA", "ELIMINADA"):
+                            res["status"] = v_status
+                            res["rating"] = v_rating
+                            if v_status == "ELIMINADA":
+                                res["detail"] = vision_res.get("detail", "Reseña eliminada según Vision IA")
+
                 return res
 
-            # 2c: si el texto no fue concluyente, enviar screenshot a Claude Vision
-            # Pre-filtro: solo llamar Vision si la página cargó contenido suficiente
+            # 2d: texto no concluyente → Claude Vision
             if _capture and len(pw_text) >= 200:
                 print(f"[check] Playwright texto sin señal → Claude Vision", flush=True)
                 vision_res = await _check_via_vision(url, screenshot_bytes=_capture)
                 if vision_res:
                     vision_res["final_url"] = pw_final_url or url
-                    vision_res["rating"] = 0
+                    vision_res.setdefault("rating", aria_rating)
                     if vision_res["status"] == "INCIERTA":
                         vision_res["_screenshot"] = _capture
                     return vision_res
@@ -681,7 +742,7 @@ async def _check_single_review(client: httpx.AsyncClient, url: str, browser=None
             vision_res = await _check_via_vision(url)
             if vision_res:
                 vision_res["final_url"] = url
-                vision_res["rating"] = 0
+                vision_res.setdefault("rating", 0)
                 return vision_res
 
         return _incierta("Sin señal en todas las capas",
