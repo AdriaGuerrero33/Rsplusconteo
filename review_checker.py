@@ -85,7 +85,12 @@ GOOGLE_UI_STRINGS: set[str] = {
     "contraer", "expandir", "panel lateral",
 }
 
-STAR_RE = re.compile(r"\b[1-5][,.]?\d?\s*(estrellas?|stars?)\b", re.IGNORECASE)
+STAR_RE = re.compile(r"\b([1-5])\s*(estrellas?|stars?)\b", re.IGNORECASE)
+# Detecta "X de 5 estrellas", "X/5", "rated X" etc. en texto renderizado por Playwright
+STAR_SCORE_RE = re.compile(
+    r'\b([1-5])\s*(?:de\s*5|\/5|out\s+of\s*5)?\s*(?:estrellas?|stars?|★)|\b([1-5])\s*★',
+    re.IGNORECASE,
+)
 # Solo enteros exactos 1-5 — los ratings agregados del negocio son decimales (4.2, 3.7…)
 RATING_RE = re.compile(r'"ratingValue"\s*:\s*"?([1-5])"?(?!\d|[,.])', re.IGNORECASE)
 
@@ -381,12 +386,40 @@ def _classify_text(text: str, source: str) -> dict | None:
 
     star_m = STAR_RE.search(text_lower)
 
-    if review_text:
-        return {"status": "ACTIVA", "detail": "Reseña visible en la página",
-                "evidence": [f'"{review_text[:100]}"'], "review_text": review_text}
+    # Extraer la puntuación numérica de estrellas del texto renderizado
+    star_rating = 0
     if star_m:
+        try:
+            star_rating = int(star_m.group(1))
+        except (ValueError, TypeError):
+            pass
+
+    # Si encontramos texto de reseña, verificar si hay puntuación baja asociada
+    if review_text:
+        if 0 < star_rating < 5:
+            return {
+                "status": "ERRONEA",
+                "detail": f"Puntuación {star_rating}/5 — solo se validan las de 5 estrellas",
+                "evidence": [f'"{review_text[:100]}"', f"rating={star_rating}"],
+                "review_text": review_text,
+                "rating": star_rating,
+            }
+        return {"status": "ACTIVA", "detail": "Reseña visible en la página",
+                "evidence": [f'"{review_text[:100]}"'], "review_text": review_text,
+                "rating": star_rating}
+
+    if star_m:
+        if 0 < star_rating < 5:
+            return {
+                "status": "ERRONEA",
+                "detail": f"Puntuación {star_rating}/5 — solo se validan las de 5 estrellas",
+                "evidence": [f"'{star_m.group()}'"],
+                "review_text": "",
+                "rating": star_rating,
+            }
         return {"status": "ACTIVA", "detail": "Puntuación de estrellas detectada",
-                "evidence": [f"'{star_m.group()}'"], "review_text": ""}
+                "evidence": [f"'{star_m.group()}'"], "review_text": "",
+                "rating": star_rating}
     return None
 
 
@@ -395,12 +428,14 @@ def _classify_text(text: str, source: str) -> dict | None:
 _VISION_PROMPT = """\
 This is a screenshot of a Google Maps review URL.
 
-Your task: decide if the specific user review is still ACTIVE or has been DELETED.
+Your task: decide if the specific user review is still ACTIVE, has been DELETED, or is INVALID due to low star rating.
 
 Classification:
-- ACTIVA  → You can see a real user-written review (any text written by a person about a place).
-            A user profile page showing their review counts as ACTIVA.
-            Even a short review like "Great place!" is ACTIVA.
+- ACTIVA   → You can see a real user-written review with 5 stars.
+             A user profile page showing their 5-star review counts as ACTIVA.
+- ERRONEA  → The review is visible BUT it has 1, 2, 3, or 4 stars (NOT 5 stars).
+             Look carefully at the star icons next to the review — count filled stars.
+             Only 5-star reviews are valid. If you see fewer than 5 stars → ERRONEA.
 - ELIMINADA → The page explicitly shows a deletion notice:
               "no longer available", "review not found", "has been removed", etc.
               OR the URL redirected to a generic place/business page (address, hours, photos)
@@ -411,10 +446,10 @@ Classification:
 Key signal: if the page shows a PLACE (restaurant, hotel, shop) with overview/photos/hours
 but NO specific review by a single user → that usually means the review was DELETED (ELIMINADA).
 
-Be generous: any visible user review text → ACTIVA.
+IMPORTANT: Always check the star rating of the visible review. Count filled/colored stars carefully.
 
 Reply ONLY with valid JSON (no markdown, no extra text):
-{"status":"ACTIVA|ELIMINADA|INCIERTA","review_text":"the review text you can read or empty","reason":"one-line explanation"}"""
+{"status":"ACTIVA|ERRONEA|ELIMINADA|INCIERTA","review_text":"the review text you can read or empty","rating":5,"reason":"one-line explanation"}"""
 
 
 async def _check_via_vision(
@@ -485,12 +520,24 @@ async def _check_via_vision(
         if json_m:
             data = _json.loads(json_m.group())
             status = data.get("status", "INCIERTA")
-            if status not in ("ACTIVA", "ELIMINADA", "INCIERTA"):
+            if status not in ("ACTIVA", "ERRONEA", "ELIMINADA", "INCIERTA"):
                 status = "INCIERTA"
+            vision_rating = 0
+            try:
+                vision_rating = int(data.get("rating", 0))
+            except (ValueError, TypeError):
+                pass
+            # Doble verificación: si Vision dice ACTIVA pero rating < 5, corregir a ERRONEA
+            if status == "ACTIVA" and 0 < vision_rating < 5:
+                status = "ERRONEA"
+            detail = f"Claude Vision ({source_label}): {data.get('reason', '')}"
+            if status == "ERRONEA" and vision_rating:
+                detail = f"Puntuación {vision_rating}/5 — solo se validan las de 5 estrellas"
             return {
                 "status": status,
-                "detail": f"Claude Vision ({source_label}): {data.get('reason', '')}",
+                "detail": detail,
                 "review_text": data.get("review_text", ""),
+                "rating": vision_rating,
                 "evidence": [f"Screenshot analizado por Claude Vision ({source_label})"],
             }
 
@@ -559,8 +606,19 @@ async def _check_single_review(client: httpx.AsyncClient, url: str, browser=None
                         "review_text": rev, "rating": rating, "final_url": final_url}
             star_m = STAR_RE.search(html_lower)
             if star_m:
+                try:
+                    star_num = int(star_m.group(1))
+                except (ValueError, TypeError):
+                    star_num = 0
+                if 0 < star_num < 5:
+                    return {
+                        "status": "ERRONEA",
+                        "detail": f"Puntuación {star_num}/5 — solo se validan las de 5 estrellas",
+                        "evidence": [f"'{star_m.group()}'"],
+                        "review_text": "", "rating": star_num, "final_url": final_url,
+                    }
                 return {"status": "ACTIVA", "detail": "Puntuación de estrellas detectada",
-                        "evidence": [f"'{star_m.group()}'"], "review_text": "", "rating": 0,
+                        "evidence": [f"'{star_m.group()}'"], "review_text": "", "rating": star_num,
                         "final_url": final_url}
 
         # ── Capa 2: Playwright (Chromium headless) ────────────────────────────
@@ -591,7 +649,7 @@ async def _check_single_review(client: httpx.AsyncClient, url: str, browser=None
             res = _classify_text(pw_text, "Playwright")
             if res:
                 res["final_url"] = pw_final_url or url
-                res["rating"] = 0
+                res.setdefault("rating", 0)  # no sobreescribir rating ya detectado
                 return res
 
             # 2c: si el texto no fue concluyente, enviar screenshot a Claude Vision
