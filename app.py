@@ -1,5 +1,5 @@
 """
-Servidor web — modelo polling (no SSE) para robustez en Railway.
+Servidor web — modelo polling para robustez en Railway.
 
 Flujo:
   POST /start-job-sheets  →  devuelve job_id, lanza tarea en background
@@ -8,7 +8,6 @@ Flujo:
 """
 
 import asyncio
-import json
 import os
 import uuid
 from dataclasses import dataclass, field
@@ -19,7 +18,8 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 
 import sheets_handler
-import learning as _learning
+import learning  as _learning
+import contacts  as _contacts
 from review_checker import check_reviews_stream
 
 load_dotenv()
@@ -36,15 +36,18 @@ DELAY            = float(os.getenv("DELAY_BETWEEN_CHECKS", "1.5"))
 
 @dataclass
 class JobState:
-    total:       int       = 0
-    results:     list      = field(default_factory=list)
-    counters:    dict      = field(default_factory=lambda: {"activas": 0, "eliminadas": 0, "inciertas": 0, "duplicadas": 0, "erroneas": 0})
-    done:        bool      = False
-    error:       str|None  = None
-    sheet_url:   str|None  = None
-    results_tab: str|None  = None
-    log:         list      = field(default_factory=list)
-    screenshots: dict      = field(default_factory=dict)  # result_index -> jpeg bytes
+    total:        int       = 0
+    results:      list      = field(default_factory=list)
+    counters:     dict      = field(default_factory=lambda: {
+                                  "activas": 0, "eliminadas": 0, "inciertas": 0,
+                                  "duplicadas": 0, "erroneas": 0})
+    done:         bool      = False
+    error:        str|None  = None
+    sheet_url:    str|None  = None
+    results_tab:  str|None  = None
+    log:          list      = field(default_factory=list)
+    screenshots:  dict      = field(default_factory=dict)  # idx → jpeg bytes
+    contact_name: str       = ""
 
 _jobs: dict[str, JobState] = {}
 
@@ -57,12 +60,62 @@ def _count(counters: dict, status: str) -> None:
     else:                        counters["inciertas"]  += 1
 
 
+def _store_result(job: "JobState", result: dict, contact_name: str = "") -> None:
+    """
+    Almacena un resultado en el job, aplicando:
+    - detección de conflicto entre contactos (misma URL enviada por personas distintas)
+    - guardado de screenshot si la reseña es INCIERTA
+    """
+    status = result.get("status", "INCIERTA")
+    url    = result.get("url", "")
+
+    # ── Detección de conflicto entre contactos ────────────────────────────────
+    conflict_submitters: list[dict] = []
+    if contact_name and url:
+        conflict_submitters = _contacts.record_submission(url, contact_name)
+
+    if conflict_submitters:
+        # Otra persona ya envió esta misma URL → ERRONEA con motivo detallado
+        note = _contacts.conflict_note(conflict_submitters)
+        # Descontar el estado original antes de cambiar
+        if status != "ERRONEA":
+            status = "ERRONEA"
+        result["status"] = "ERRONEA"
+        result["detail"] = note
+        result["contact_conflict"] = True
+        result["conflict_submitters"] = conflict_submitters
+    elif contact_name and url:
+        # Primer envío de esta URL por este contacto: registrar sin conflicto
+        pass
+
+    _count(job.counters, status)
+
+    # ── Screenshot para revisión manual ──────────────────────────────────────
+    sc_bytes = result.pop("_screenshot", None)
+    idx = len(job.results)
+    if sc_bytes and status == "INCIERTA":
+        job.screenshots[idx] = sc_bytes
+
+    job.results.append({
+        "url":                result.get("url", ""),
+        "status":             status,
+        "detail":             result.get("detail", ""),
+        "evidence":           result.get("evidence", []),
+        "review_text":        result.get("review_text", ""),
+        "rating":             result.get("rating", 0),
+        "contact_name":       contact_name,
+        "contact_conflict":   result.get("contact_conflict", False),
+        "conflict_submitters": result.get("conflict_submitters", []),
+        "has_screenshot":     idx in job.screenshots,
+    })
+
+
 def _mark_duplicates(job: "JobState") -> None:
     """
-    Detecta duplicadas por dos criterios (en orden de prioridad):
+    Detecta duplicadas dentro del mismo job:
     1. Misma URL exacta → el segundo es DUPLICADA del primero
-    2. Texto de reseña muy similar (≥95%) → el posterior es DUPLICADA del anterior
-    El primero de cada grupo siempre permanece con su estado original.
+    2. Texto de reseña ≥95% similar → el posterior es DUPLICADA del anterior
+    Los conflictos entre contactos (ERRONEA) no se sobrescriben.
     """
     import re as _re
     from difflib import SequenceMatcher
@@ -72,21 +125,21 @@ def _mark_duplicates(job: "JobState") -> None:
     def _norm(t: str) -> str:
         return " ".join(t.lower().split())
 
-    def _apply_duplicate(dup_idx: int, orig_idx: int, reason: str) -> None:
-        old_status = job.results[dup_idx]["status"]
-        if old_status == "ACTIVA":
-            job.counters["activas"] -= 1
-        elif old_status == "ERRONEA":
-            job.counters["erroneas"] -= 1
-        elif old_status == "INCIERTA":
-            job.counters["inciertas"] -= 1
-        job.results[dup_idx]["status"] = "DUPLICADA"
-        job.results[dup_idx]["detail"] = reason
+    def _apply(dup_idx: int, orig_idx: int, reason: str) -> None:
+        r = job.results[dup_idx]
+        if r.get("contact_conflict"):
+            return  # no sobreescribir conflictos entre contactos
+        old = r["status"]
+        if old == "ACTIVA":    job.counters["activas"]    -= 1
+        elif old == "ERRONEA": job.counters["erroneas"]   -= 1
+        elif old == "INCIERTA":job.counters["inciertas"]  -= 1
+        r["status"] = "DUPLICADA"
+        r["detail"] = reason
         job.counters["duplicadas"] += 1
 
-    duplicate_of: dict[int, int] = {}  # índice duplicado → índice original
+    duplicate_of: dict[int, int] = {}
 
-    # ── 1. Duplicadas por URL idéntica ────────────────────────────────────────
+    # 1. URL idéntica
     url_seen: dict[str, int] = {}
     for i, r in enumerate(job.results):
         url = (r.get("url") or "").strip().lower()
@@ -97,11 +150,11 @@ def _mark_duplicates(job: "JobState") -> None:
         else:
             url_seen[url] = i
 
-    # ── 2. Duplicadas por texto similar (≥95%) ────────────────────────────────
+    # 2. Texto similar
     candidates: list[tuple[int, str]] = []
     for i, r in enumerate(job.results):
-        if i in duplicate_of:
-            continue  # ya marcado como duplicado por URL
+        if i in duplicate_of or r.get("contact_conflict"):
+            continue
         text = (r.get("review_text") or "").strip()
         if not text or len(text.split()) < 6 or _biz.match(text):
             continue
@@ -118,21 +171,20 @@ def _mark_duplicates(job: "JobState") -> None:
             if SequenceMatcher(None, txt_a, txt_b).ratio() >= 0.95:
                 duplicate_of[idx_b] = idx_a
 
-    # ── Aplicar marcas ────────────────────────────────────────────────────────
     for dup_idx, orig_idx in duplicate_of.items():
-        url_dup  = (job.results[dup_idx].get("url") or "").strip().lower()
-        url_orig = (job.results[orig_idx].get("url") or "").strip().lower()
-        if url_dup == url_orig:
-            reason = f"URL idéntica a reseña #{orig_idx + 1}"
-        else:
-            reason = f"Texto idéntico a reseña #{orig_idx + 1}"
-        _apply_duplicate(dup_idx, orig_idx, reason)
+        url_d = (job.results[dup_idx].get("url") or "").strip().lower()
+        url_o = (job.results[orig_idx].get("url") or "").strip().lower()
+        reason = (f"URL idéntica a reseña #{orig_idx+1}"
+                  if url_d == url_o else
+                  f"Texto idéntico a reseña #{orig_idx+1}")
+        _apply(dup_idx, orig_idx, reason)
 
 
 # ── Trabajos en background ────────────────────────────────────────────────────
 
 async def _run_sheets_job(job_id: str, sheet_url: str) -> None:
     job = _jobs[job_id]
+    contact = job.contact_name
     try:
         job.log.append("Conectando con Google Sheets...")
         gc          = sheets_handler.authenticate(CREDENTIALS_PATH)
@@ -153,31 +205,15 @@ async def _run_sheets_job(job_id: str, sheet_url: str) -> None:
         col_name  = headers[col_idx] if col_idx < len(headers) else f"Columna {col_idx+1}"
         url_items = sheets_handler.extract_urls(rows, col_idx)
         job.total = len(url_items)
-        job.log.append(f'Columna "{col_name}" — {job.total} reseñas')
+        job.log.append(f'Columna "{col_name}" — {job.total} reseñas'
+                       + (f' · Contacto: {contact}' if contact else ''))
 
         async for result in check_reviews_stream(url_items, MAX_CONCURRENT, DELAY):
-            status = result.get("status", "INCIERTA")
-            _count(job.counters, status)
-            # Guardar screenshot si existe (para revisión manual de inciertas)
-            sc_bytes = result.pop("_screenshot", None)
-            idx = len(job.results)
-            if sc_bytes and status == "INCIERTA":
-                job.screenshots[idx] = sc_bytes
-            job.results.append({
-                "url":          result.get("url", ""),
-                "status":       status,
-                "detail":       result.get("detail", ""),
-                "evidence":     result.get("evidence", []),
-                "review_text":  result.get("review_text", ""),
-                "rating":       result.get("rating", 0),
-                "has_screenshot": idx in job.screenshots,
-            })
+            _store_result(job, result, contact)
 
-        # Escribir SI/NO en la hoja original (al lado de cada URL)
         job.log.append("Escribiendo SI/NO en la hoja original...")
         sheets_handler.write_si_no_to_source(worksheet, url_items, job.results)
 
-        # También escribir resultados completos en la pestaña de resultados
         job.log.append(f'Escribiendo resumen en "{RESULTS_TAB}"...')
         ws_out = sheets_handler.get_or_create_results_tab(spreadsheet, RESULTS_TAB)
         sheets_handler.write_results(ws_out,
@@ -198,27 +234,15 @@ async def _run_sheets_job(job_id: str, sheet_url: str) -> None:
 
 async def _run_direct_job(job_id: str, urls: list[str]) -> None:
     job = _jobs[job_id]
+    contact = job.contact_name
     try:
         url_items = [{"url": u.strip(), "row_data": [u.strip()]} for u in urls if u.strip()]
         job.total = len(url_items)
-        job.log.append(f"Verificando {job.total} URLs...")
+        job.log.append(f"Verificando {job.total} URLs"
+                       + (f" · Contacto: {contact}" if contact else "") + "...")
 
         async for result in check_reviews_stream(url_items, MAX_CONCURRENT, DELAY):
-            status = result.get("status", "INCIERTA")
-            _count(job.counters, status)
-            sc_bytes = result.pop("_screenshot", None)
-            idx = len(job.results)
-            if sc_bytes and status == "INCIERTA":
-                job.screenshots[idx] = sc_bytes
-            job.results.append({
-                "url":          result.get("url", ""),
-                "status":       status,
-                "detail":       result.get("detail", ""),
-                "evidence":     result.get("evidence", []),
-                "review_text":  result.get("review_text", ""),
-                "rating":       result.get("rating", 0),
-                "has_screenshot": idx in job.screenshots,
-            })
+            _store_result(job, result, contact)
 
         _mark_duplicates(job)
         job.done = True
@@ -231,18 +255,20 @@ async def _run_direct_job(job_id: str, urls: list[str]) -> None:
 # ── Endpoints HTTP ────────────────────────────────────────────────────────────
 
 class SheetsRequest(BaseModel):
-    sheet_url: str
+    sheet_url:    str
+    contact_name: str = ""
 
 class DirectRequest(BaseModel):
-    urls: list[str]
+    urls:         list[str]
+    contact_name: str = ""
 
 class FeedbackRequest(BaseModel):
-    url: str
-    auto_status: str
+    url:            str
+    auto_status:    str
     correct_status: str
-    review_text: str = ""
-    detail: str = ""
-    source: str = "manual"
+    review_text:    str = ""
+    detail:         str = ""
+    source:         str = "manual"
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -253,13 +279,14 @@ async def index():
 
 @app.get("/health")
 async def health():
-    has_creds = bool(os.getenv("GOOGLE_CREDENTIALS_JSON", "").strip())
-    return JSONResponse({"status": "ok", "credentials_env_set": has_creds})
+    has_creds   = bool(os.getenv("GOOGLE_CREDENTIALS_JSON", "").strip())
+    has_api_key = bool(os.getenv("ANTHROPIC_API_KEY", "").strip())
+    return JSONResponse({"status": "ok", "credentials_env_set": has_creds,
+                         "vision_active": has_api_key})
 
 
 @app.get("/job/{job_id}/screenshot/{idx}")
 async def get_screenshot(job_id: str, idx: int):
-    """Devuelve el screenshot JPEG de una reseña INCIERTA para revisión manual."""
     job = _jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -272,7 +299,9 @@ async def get_screenshot(job_id: str, idx: int):
 @app.post("/start-job-sheets")
 async def start_job_sheets(body: SheetsRequest):
     job_id = str(uuid.uuid4())
-    _jobs[job_id] = JobState()
+    job = JobState()
+    job.contact_name = body.contact_name.strip()
+    _jobs[job_id] = job
     asyncio.create_task(_run_sheets_job(job_id, body.sheet_url))
     return {"job_id": job_id}
 
@@ -280,7 +309,9 @@ async def start_job_sheets(body: SheetsRequest):
 @app.post("/start-job-direct")
 async def start_job_direct(body: DirectRequest):
     job_id = str(uuid.uuid4())
-    _jobs[job_id] = JobState()
+    job = JobState()
+    job.contact_name = body.contact_name.strip()
+    _jobs[job_id] = job
     asyncio.create_task(_run_direct_job(job_id, body.urls))
     return {"job_id": job_id}
 
@@ -301,15 +332,12 @@ async def job_status(job_id: str, since: int = 0):
         "sheet_url":   job.sheet_url,
         "results_tab": job.results_tab,
         "job_id":      job_id,
-        # Cuando el job termina, enviar la lista completa con estados definitivos
-        # (incluyendo cambios de _mark_duplicates que ocurren post-streaming)
         "all_results": job.results if job.done else None,
     }
 
 
 @app.post("/feedback")
 async def save_feedback(body: FeedbackRequest):
-    """Guarda una corrección del usuario para mejorar futuras clasificaciones."""
     _learning.add_correction(
         url=body.url,
         auto_status=body.auto_status,
@@ -323,8 +351,13 @@ async def save_feedback(body: FeedbackRequest):
 
 @app.get("/learning-stats")
 async def learning_stats():
-    """Retorna estadísticas del sistema de aprendizaje."""
     return _learning.get_stats()
+
+
+@app.get("/contacts/recent")
+async def contacts_recent():
+    """Retorna contactos recientes para autocompletado."""
+    return {"contacts": _contacts.recent_contacts(days=14)}
 
 
 if __name__ == "__main__":

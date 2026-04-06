@@ -115,6 +115,19 @@
     .rr-actions { display:flex; align-items:center; gap:8px; }
     .rr-correct-btn { padding:4px 10px; border:1px solid #e5e7eb; border-radius:6px; background:white; font-size:11px; color:#6b7280; cursor:pointer; transition:border-color .15s; }
     .rr-correct-btn:hover { border-color:#4f46e5; color:#4f46e5; }
+    .rr-conflict { display:flex; align-items:flex-start; gap:8px; padding:8px 12px; border-radius:8px; margin-bottom:8px; font-size:13px; background:#fff7ed; border:1px solid #fed7aa; color:#9a3412; }
+    .rr-contact-tag { display:inline-flex; align-items:center; gap:4px; background:#e0f2fe; color:#0369a1; border-radius:999px; font-size:11px; font-weight:600; padding:2px 8px; margin-left:6px; }
+    .vision-badge { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:3px 10px; border-radius:999px; }
+    .vision-badge.on  { background:#d1fae5; color:#065f46; }
+    .vision-badge.off { background:#f3f4f6; color:#6b7280; }
+    /* Contact input */
+    .contact-row { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+    .contact-label { font-size:12px; font-weight:600; color:#6b7280; white-space:nowrap; }
+    .contact-input { flex:1; padding:8px 12px; border:2px solid #e5e7eb; border-radius:8px; font-size:13px; outline:none; transition:border-color .2s; }
+    .contact-input:focus { border-color:#4f46e5; }
+    .contact-suggestions { position:absolute; background:white; border:1px solid #e5e7eb; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,.1); z-index:100; min-width:200px; }
+    .contact-suggestion { padding:8px 12px; font-size:13px; cursor:pointer; color:#374151; }
+    .contact-suggestion:hover { background:#f3f4f6; }
     .log-line.duplicada .log-text { color:#a78bfa; }
     .log-line.erronea   .log-text { color:#fb7185; }
     @media(max-width:560px){ .counters{grid-template-columns:repeat(2,1fr)} .input-row{flex-direction:column} }
@@ -163,12 +176,27 @@
 <body>
 <div class="container">
   <div class="card">
-    <h1>Verificador de Reseñas Google</h1>
-    <p class="subtitle">Comprueba qué reseñas siguen activas y cuáles han sido eliminadas.</p>
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:4px">
+      <div>
+        <h1>Verificador de Reseñas Google</h1>
+        <p class="subtitle">Comprueba qué reseñas siguen activas y cuáles han sido eliminadas.</p>
+      </div>
+      <span class="vision-badge off" id="vision-badge" title="Claude Vision analiza capturas de pantalla cuando no puede detectar el estado por texto">⬤ Vision IA</span>
+    </div>
     <div class="tabs">
       <button class="tab-btn active" onclick="switchTab('sheet')">Google Sheets</button>
       <button class="tab-btn"        onclick="switchTab('direct')">URLs directas</button>
     </div>
+
+    <!-- Campo de contacto compartido entre tabs -->
+    <div class="contact-row" style="position:relative">
+      <span class="contact-label">👤 Contacto:</span>
+      <input type="text" id="contact-name" class="contact-input"
+             placeholder="Nombre de quien envía las URLs (ej: Pepe)"
+             autocomplete="off" oninput="showContactSuggestions()" onblur="hideContactSuggestions()" />
+      <div id="contact-suggestions" class="contact-suggestions" style="display:none;position:absolute;top:100%;left:80px;right:0"></div>
+    </div>
+
     <div class="tab-panel active" id="panel-sheet">
       <div class="input-row">
         <input type="text" id="sheet-url" placeholder="https://docs.google.com/spreadsheets/d/..." />
@@ -325,12 +353,58 @@
 
 <script>
   // ── Estado del polling ──────────────────────────────────────────────────────
-  let _pollTimer   = null;
-  let _allResults  = [];   // acumula todos los resultados para la tabla final
-  let _lastLogLen  = 0;
-  let _currentJobId = null;  // job_id actual (para URLs de screenshot)
+  let _pollTimer    = null;
+  let _allResults   = [];
+  let _lastLogLen   = 0;
+  let _currentJobId = null;
+  let _recentContacts = [];
 
   function _stopPoll() { if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; } }
+
+  // ── Contacto / autocomplete ─────────────────────────────────────────────────
+  function _contactName() {
+    return (document.getElementById("contact-name").value || "").trim();
+  }
+
+  function showContactSuggestions() {
+    const val = _contactName().toLowerCase();
+    const box = document.getElementById("contact-suggestions");
+    const matches = _recentContacts.filter(c => c.toLowerCase().includes(val) && c.toLowerCase() !== val);
+    if (!matches.length) { box.style.display = "none"; return; }
+    box.innerHTML = matches.slice(0,6).map(c =>
+      `<div class="contact-suggestion" onmousedown="pickContact('${c.replace(/'/g,"\\'")}')">👤 ${c}</div>`
+    ).join("");
+    box.style.display = "block";
+  }
+
+  function hideContactSuggestions() {
+    setTimeout(() => document.getElementById("contact-suggestions").style.display = "none", 150);
+  }
+
+  function pickContact(name) {
+    document.getElementById("contact-name").value = name;
+    document.getElementById("contact-suggestions").style.display = "none";
+  }
+
+  // Cargar contactos recientes y estado de Vision al arrancar
+  window.addEventListener("load", async () => {
+    try {
+      const [cr, health] = await Promise.all([
+        fetch("/contacts/recent").then(r => r.json()),
+        fetch("/health").then(r => r.json()),
+      ]);
+      _recentContacts = cr.contacts || [];
+      const badge = document.getElementById("vision-badge");
+      if (health.vision_active) {
+        badge.className = "vision-badge on";
+        badge.title = "Claude Vision activo — analiza capturas de pantalla";
+        badge.textContent = "⬤ Vision IA activa";
+      } else {
+        badge.textContent = "⬤ Vision IA inactiva";
+        badge.title = "Configura ANTHROPIC_API_KEY para activar Vision";
+      }
+    } catch(e) {}
+  });
 
   // ── Iniciar trabajos ────────────────────────────────────────────────────────
   function switchTab(tab) {
@@ -347,7 +421,7 @@
     try {
       const res  = await fetch("/start-job-sheets", {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({sheet_url: url})
+        body: JSON.stringify({sheet_url: url, contact_name: _contactName()})
       });
       const {job_id} = await res.json();
       _currentJobId = job_id;
@@ -368,7 +442,7 @@
     try {
       const res = await fetch("/start-job-direct", {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({urls})
+        body: JSON.stringify({urls, contact_name: _contactName()})
       });
       const {job_id} = await res.json();
       addLog("info","ℹ",`Verificando ${urls.length} URLs...`);
@@ -540,34 +614,41 @@
   };
 
   function friendlyDetail(row) {
-    const d = row.detail || "";
+    const d  = row.detail || "";
     const st = row.status;
+
+    // Conflicto entre contactos (prioridad máxima)
+    if (row.contact_conflict) return d; // ya viene formateado desde el servidor
+
     if (st === "ACTIVA") {
-      if (row.review_text) return "Reseña activa con texto visible";
-      if (d.includes("estrellas") || d.includes("stars") || d.includes("star"))
-        return "Puntuación de estrellas detectada";
+      if (row.review_text) return "Reseña activa — texto visible";
+      if (d.includes("estrellas") || d.includes("stars"))
+        return "Puntuación de 5 estrellas detectada";
       return "Reseña activa detectada";
     }
     if (st === "ELIMINADA") {
-      if (d.includes("negocio") || d.includes("place"))
-        return "La URL redirige al negocio — la reseña no existe";
-      if (d.includes("no longer") || d.includes("ya no") || d.includes("no disponible"))
+      if (d.includes("negocio") || d.includes("place") || d.includes("redirige"))
+        return "La URL redirige a la página del negocio — reseña no encontrada";
+      if (d.includes("no longer") || d.includes("ya no") || d.includes("disponible"))
         return "Google confirma que la reseña ya no está disponible";
       return "Reseña eliminada";
     }
     if (st === "DUPLICADA") {
       const m = d.match(/#(\d+)/);
-      if (d.includes("URL")) return `URL idéntica a la reseña #${m?.[1]||"?"}`;
+      if (d.toLowerCase().includes("url")) return `URL idéntica a la reseña #${m?.[1]||"?"}`;
       return `Texto idéntico a la reseña #${m?.[1]||"?"}`;
     }
     if (st === "ERRONEA") {
+      const r = row.rating;
+      if (r > 0 && r < 5) return `Reseña de ${r}/5 estrellas — solo válidas las de 5★`;
+      if (d.includes("también por") || d.includes("enviada")) return d; // conflicto de contacto
       const m = d.match(/(\d+)\/5/);
       return m ? `Reseña de ${m[1]}/5 — solo válidas las de 5 estrellas` : "Puntuación insuficiente";
     }
     if (st === "INCIERTA") {
-      if (d.includes("Timeout")) return "Tiempo de espera agotado";
-      if (d.includes("Vision")) return "No fue posible determinar el estado con la IA";
-      return "No se pudo verificar el estado";
+      if (d.includes("Timeout") || d.includes("timeout")) return "Tiempo de espera agotado";
+      if (d.includes("Vision") || d.includes("vision")) return "La IA no pudo determinar el estado";
+      return "No se pudo verificar — revisar manualmente";
     }
     return d || "Sin información";
   }
@@ -576,20 +657,25 @@
     const list = document.getElementById("results-list");
     list.innerHTML = "";
     _allResults.forEach((row, i) => {
-      const st = row.status;
-      const icon = STATUS_ICONS[st] || "?";
+      const st    = row.status;
+      const icon  = STATUS_ICONS[st]  || "?";
       const label = STATUS_LABELS[st] || st;
       const detail = friendlyDetail(row);
       const r = row.rating || 0;
       const starsStr = r
         ? "⭐".repeat(Math.min(r,5)) + (r < 5 ? ` ⚠ ${r}/5` : ` ${r}/5`)
         : "";
+      const hasConflict = row.contact_conflict;
 
       const div = document.createElement("div");
-      div.className = `result-row st-${st}`;
+      div.className = `result-row st-${st}` + (hasConflict ? " st-ERRONEA" : "");
       div.id = `rrow-${i}`;
 
-      // Cabecera (siempre visible)
+      // ── Cabecera ────────────────────────────────────────────────────────────
+      const contactTag = row.contact_name
+        ? `<span class="rr-contact-tag">👤 ${escapeHtml(row.contact_name)}</span>` : "";
+      const conflictFlag = hasConflict ? `<span title="${escapeHtml(row.detail)}" style="font-size:16px;cursor:help">⚠️</span>` : "";
+
       const head = document.createElement("div");
       head.className = "rr-head";
       head.innerHTML =
@@ -597,21 +683,43 @@
         `<a class="rr-url" href="${escapeHtml(row.url)}" target="_blank" onclick="event.stopPropagation()">`+
           `${escapeHtml(row.url)}</a>`+
         `<span class="rr-badge"><span class="badge ${st}" id="badge-row-${i}">${icon} ${label}</span></span>`+
+        contactTag+
         (starsStr ? `<span class="rr-stars">${escapeHtml(starsStr)}</span>` : "")+
+        conflictFlag+
         `<span class="rr-toggle">▼</span>`;
       head.addEventListener("click", () => toggleRow(i));
 
-      // Cuerpo expandible
+      // ── Cuerpo expandible ───────────────────────────────────────────────────
       const body = document.createElement("div");
       body.className = "rr-body";
-      let bodyHtml =
+
+      // Aviso de conflicto entre contactos (siempre primero si existe)
+      let bodyHtml = "";
+      if (hasConflict) {
+        const others = (row.conflict_submitters || [])
+          .map(s => `<strong>${escapeHtml(s.name)}</strong> el ${escapeHtml(s.date)}`)
+          .join(" y ");
+        bodyHtml +=
+          `<div class="rr-conflict">`+
+            `<span style="font-size:16px;flex-shrink:0">⚠️</span>`+
+            `<span>Esta URL ya fue enviada por ${others}. Podría ser una reseña que no pertenece a este contacto.</span>`+
+          `</div>`;
+      }
+
+      bodyHtml +=
         `<div class="rr-reason st-${st}">`+
           `<span class="rr-reason-icon">${icon}</span>`+
           `<span><strong>${label}:</strong> ${escapeHtml(detail)}</span>`+
         `</div>`;
+
       if (row.review_text) {
         bodyHtml +=
           `<div class="rr-review-text">"${escapeHtml(row.review_text.slice(0,300))}"</div>`;
+      }
+      if (r > 0 && r < 5) {
+        bodyHtml +=
+          `<div style="font-size:12px;color:#9a3412;background:#fff7ed;padding:6px 10px;border-radius:6px;margin-bottom:6px">`+
+          `⭐ Puntuación detectada: ${r}/5 — Solo se validan las reseñas de 5 estrellas</div>`;
       }
       bodyHtml +=
         `<div class="rr-actions">`+
