@@ -254,49 +254,70 @@ async def _fetch_bypassing_consent(client: httpx.AsyncClient, url: str) -> tuple
 
 _PLAYWRIGHT_AVAILABLE: bool | None = None  # None = no comprobado aún
 
-async def _fetch_via_playwright(url: str) -> tuple[str, bytes | None, str]:
+_BROWSER_LAUNCH_ARGS = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+]
+
+
+async def _create_browser():
+    """Lanza un navegador Chromium y devuelve (playwright_ctx, browser)."""
+    from playwright.async_api import async_playwright  # type: ignore
+    ctx = async_playwright()
+    p   = await ctx.__aenter__()
+    browser = await p.chromium.launch(headless=True, args=_BROWSER_LAUNCH_ARGS)
+    return ctx, browser
+
+
+async def _fetch_page(url: str, browser) -> tuple[str, bytes | None, str]:
+    """
+    Abre una nueva página en el browser dado, navega a url y devuelve
+    (texto, screenshot_jpeg, url_final).
+    Cierra el contexto (no el browser) al terminar.
+    """
+    context = await browser.new_context(
+        user_agent=HEADERS["User-Agent"],
+        locale="en-US",
+        viewport={"width": 1280, "height": 900},
+    )
+    page = await context.new_page()
+    try:
+        try:
+            await page.goto(url, wait_until="networkidle", timeout=25000)
+        except Exception:
+            # networkidle puede fallar por timeout; la página suele estar suficientemente cargada
+            pass
+
+        final_url = page.url
+        text      = await page.inner_text("body")
+        screenshot = await page.screenshot(full_page=False, type="jpeg", quality=80)
+        print(f"[playwright] OK: {len(text)} chars | final={final_url[:70]}", flush=True)
+        return text, screenshot, final_url
+    finally:
+        await context.close()
+
+
+async def _fetch_via_playwright(url: str, browser=None) -> tuple[str, bytes | None, str]:
     """
     Renderiza la URL con Chromium headless real.
+    Si se pasa `browser`, lo reutiliza (pool). Si no, crea uno temporal.
     Devuelve (texto_de_la_página, screenshot_jpeg_bytes, url_final_tras_redirección).
     """
     global _PLAYWRIGHT_AVAILABLE
     if _PLAYWRIGHT_AVAILABLE is False:
         return "", None, url
 
+    _own_browser = browser is None
+    _ctx = None
     try:
-        from playwright.async_api import async_playwright  # type: ignore
+        if _own_browser:
+            from playwright.async_api import async_playwright  # type: ignore  # noqa
+            _ctx, browser = await _create_browser()
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                ],
-            )
-            context = await browser.new_context(
-                user_agent=HEADERS["User-Agent"],
-                locale="en-US",
-                viewport={"width": 1280, "height": 900},
-            )
-            page = await context.new_page()
-
-            try:
-                await page.goto(url, wait_until="networkidle", timeout=25000)
-            except Exception:
-                pass
-
-            await page.wait_for_timeout(2000)
-
-            final_url = page.url
-            text = await page.inner_text("body")
-            screenshot = await page.screenshot(full_page=False, type="jpeg", quality=80)
-            await browser.close()
-
+        text, screenshot, final_url = await _fetch_page(url, browser)
         _PLAYWRIGHT_AVAILABLE = True
-        print(f"[playwright] OK: {len(text)} chars | final={final_url[:70]}", flush=True)
         return text, screenshot, final_url
 
     except ImportError:
@@ -306,6 +327,18 @@ async def _fetch_via_playwright(url: str) -> tuple[str, bytes | None, str]:
     except Exception as e:
         print(f"[playwright] Error: {e}", flush=True)
         return "", None, url
+    finally:
+        if _own_browser:
+            if browser:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+            if _ctx:
+                try:
+                    await _ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
 
 
 def _classify_text(text: str, source: str) -> dict | None:
@@ -485,7 +518,7 @@ async def _fetch_via_jina(client: httpx.AsyncClient, url: str) -> tuple[str, str
 
 # ─── Verificación de una URL ──────────────────────────────────────────────────
 
-async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
+async def _check_single_review(client: httpx.AsyncClient, url: str, browser=None) -> dict:
     final_url = url
     _capture: bytes | None = None  # screenshot de Playwright para revisión manual
 
@@ -532,7 +565,7 @@ async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
 
         # ── Capa 2: Playwright (Chromium headless) ────────────────────────────
         print(f"[check] Capa 1 sin señal → Playwright", flush=True)
-        pw_text, _capture, pw_final_url = await _fetch_via_playwright(url)
+        pw_text, _capture, pw_final_url = await _fetch_via_playwright(url, browser=browser)
 
         if pw_text:
             # 2a: detectar redirección a página de negocio (reseña eliminada)
@@ -562,7 +595,8 @@ async def _check_single_review(client: httpx.AsyncClient, url: str) -> dict:
                 return res
 
             # 2c: si el texto no fue concluyente, enviar screenshot a Claude Vision
-            if _capture:
+            # Pre-filtro: solo llamar Vision si la página cargó contenido suficiente
+            if _capture and len(pw_text) >= 200:
                 print(f"[check] Playwright texto sin señal → Claude Vision", flush=True)
                 vision_res = await _check_via_vision(url, screenshot_bytes=_capture)
                 if vision_res:
@@ -612,28 +646,56 @@ async def check_reviews_stream(
     result_queue: asyncio.Queue = asyncio.Queue()
     total = len(url_items)
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
+    # ── Browser pool: un solo navegador para todo el job ─────────────────────
+    _pool_browser  = None
+    _pool_ctx      = None
+    if _PLAYWRIGHT_AVAILABLE is not False:
+        try:
+            _pool_ctx, _pool_browser = await _create_browser()
+            print("[playwright] Browser pool listo para el job", flush=True)
+        except Exception as e:
+            print(f"[playwright] No se pudo crear browser pool: {e}", flush=True)
+            _pool_browser = None
 
-        async def check_one(idx: int, item: dict):
-            async with semaphore:
-                if idx > 0:
-                    await asyncio.sleep(delay_seconds)
-                result = await _check_single_review(client, item["url"])
-                result = {**item, **result, "index": idx}
-            await result_queue.put(result)
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
 
-        tasks = [asyncio.create_task(check_one(i, item)) for i, item in enumerate(url_items)]
+            async def check_one(idx: int, item: dict):
+                async with semaphore:
+                    if idx > 0:
+                        await asyncio.sleep(delay_seconds)
+                    result = await _check_single_review(
+                        client, item["url"], browser=_pool_browser
+                    )
+                    result = {**item, **result, "index": idx}
+                await result_queue.put(result)
 
-        received = 0
-        while received < total:
+            tasks = [asyncio.create_task(check_one(i, item)) for i, item in enumerate(url_items)]
+
+            received = 0
+            while received < total:
+                try:
+                    result = await asyncio.wait_for(result_queue.get(), timeout=120.0)
+                    yield result
+                    received += 1
+                except asyncio.TimeoutError:
+                    break
+
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    finally:
+        # Cierre limpio del browser pool al terminar el job
+        if _pool_browser:
             try:
-                result = await asyncio.wait_for(result_queue.get(), timeout=120.0)
-                yield result
-                received += 1
-            except asyncio.TimeoutError:
-                break
-
-        await asyncio.gather(*tasks, return_exceptions=True)
+                await _pool_browser.close()
+                print("[playwright] Browser pool cerrado", flush=True)
+            except Exception:
+                pass
+        if _pool_ctx:
+            try:
+                await _pool_ctx.__aexit__(None, None, None)
+            except Exception:
+                pass
 
 
 async def check_reviews(url_items, max_concurrent=3, delay_seconds=0.5, progress_callback=None):
