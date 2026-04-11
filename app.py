@@ -28,8 +28,8 @@ app = FastAPI()
 
 CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH", "credentials.json")
 RESULTS_TAB      = os.getenv("RESULTS_TAB", "Estado_Reseñas")
-MAX_CONCURRENT   = int(os.getenv("MAX_CONCURRENT_CHECKS", "3"))
-DELAY            = float(os.getenv("DELAY_BETWEEN_CHECKS", "1.5"))
+MAX_CONCURRENT   = int(os.getenv("MAX_CONCURRENT_CHECKS", "5"))
+DELAY            = float(os.getenv("DELAY_BETWEEN_CHECKS", "0.3"))
 
 
 # ── Estado de trabajos en memoria ─────────────────────────────────────────────

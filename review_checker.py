@@ -527,7 +527,7 @@ async def _check_via_vision(
         source_label = "Playwright" if screenshot_bytes else "thum.io"
         print(f"[vision] Enviando a Claude Vision ({source_label}, {len(img_data)} bytes)", flush=True)
 
-        ai = AsyncAnthropic(api_key=api_key)
+        ai = AsyncAnthropic(api_key=api_key, timeout=22.0)  # timeout explícito
         resp = await ai.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=400,
@@ -599,7 +599,12 @@ async def _fetch_via_jina(client: httpx.AsyncClient, url: str) -> tuple[str, str
 
 # ─── Verificación de una URL ──────────────────────────────────────────────────
 
-async def _check_single_review(client: httpx.AsyncClient, url: str, browser=None) -> dict:
+async def _check_single_review(
+    client: httpx.AsyncClient,
+    url: str,
+    browser=None,   # legacy — usar pool en su lugar
+    pool: "_BrowserPool | None" = None,
+) -> dict:
     final_url = url
     _capture: bytes | None = None  # screenshot de Playwright para revisión manual
 
@@ -608,8 +613,13 @@ async def _check_single_review(client: httpx.AsyncClient, url: str, browser=None
             "status": "INCIERTA", "detail": detail,
             "evidence": evidence or [], "review_text": "",
             "rating": 0, "final_url": final_url,
-            "_screenshot": _capture,        # None si no se capturó
+            "_screenshot": _capture,
         }
+
+    async def _playwright_fetch() -> tuple[str, bytes | None, str, str]:
+        if pool is not None:
+            return await pool.fetch(url)
+        return await _fetch_via_playwright(url, browser=browser)
 
     try:
         # ── Capa 1: fetch directo + JSON-LD ───────────────────────────────────
@@ -626,7 +636,7 @@ async def _check_single_review(client: httpx.AsyncClient, url: str, browser=None
                             "evidence": [f"'{phrase}'"], "review_text": "", "rating": 0,
                             "final_url": final_url}
             rating = _extract_rating(html)
-            rev = _extract_review_text(html)
+            rev    = _extract_review_text(html)
             if rev or rating:
                 status = "ACTIVA" if rating == 5 or (rating == 0 and rev) else "ERRONEA"
                 if 0 < rating < 5:
@@ -657,17 +667,17 @@ async def _check_single_review(client: httpx.AsyncClient, url: str, browser=None
 
         # ── Capa 2: Playwright (Chromium headless) ────────────────────────────
         print(f"[check] Capa 1 sin señal → Playwright", flush=True)
-        pw_text, _capture, pw_final_url, pw_html = await _fetch_via_playwright(url, browser=browser)
+        pw_text, _capture, pw_final_url, pw_html = await _playwright_fetch()
 
         if pw_text:
-            # 2a: detectar redirección a página de negocio (reseña eliminada)
+            # 2a: redirección a página de negocio → ELIMINADA
             redirected_to_place = (
                 "/maps/place/" in pw_final_url
                 and "/maps/contrib/" not in pw_final_url
                 and "maps.app.goo.gl" not in pw_final_url
             )
             if redirected_to_place:
-                print(f"[check] Playwright redirigió a página de negocio → ELIMINADA", flush=True)
+                print(f"[check] Redirigió a negocio → ELIMINADA", flush=True)
                 return {
                     "status": "ELIMINADA",
                     "detail": "Redirige a la página del negocio — reseña no encontrada",
@@ -677,11 +687,10 @@ async def _check_single_review(client: httpx.AsyncClient, url: str, browser=None
                     "_screenshot": _capture,
                 }
 
-            # 2b: extraer rating de aria-labels del HTML renderizado
-            # (las estrellas de Google Maps son SVG — no aparecen en inner_text)
+            # 2b: rating de aria-labels (estrellas SVG → no en inner_text)
             aria_rating = _extract_aria_rating(pw_html) if pw_html else 0
 
-            # 2c: clasificar el texto renderizado por Playwright
+            # 2c: clasificar texto
             res = _classify_text(pw_text, "Playwright")
             if res:
                 res["final_url"] = pw_final_url or url
@@ -694,29 +703,38 @@ async def _check_single_review(client: httpx.AsyncClient, url: str, browser=None
                         res["status"] = "ERRONEA"
                         res["detail"] = f"Puntuación {aria_rating}/5 — solo se validan las de 5 estrellas"
 
-                # Si el resultado es ACTIVA pero aún no tenemos rating, llamar Vision
-                # para verificar las estrellas (son visuales, no siempre en texto)
-                if res["status"] == "ACTIVA" and res.get("rating", 0) == 0 and _capture:
-                    print(f"[check] ACTIVA sin rating → verificando estrellas con Vision", flush=True)
+                # Solo llamar Vision si el resultado es ACTIVA, el rating sigue
+                # siendo 0 (desconocido) Y el texto encontrado parece corto/sospechoso
+                # (texto largo con rating 0 → probablemente 5 estrellas sin aria-label)
+                review_text_len = len((res.get("review_text") or "").strip())
+                need_vision = (
+                    res["status"] == "ACTIVA"
+                    and res.get("rating", 0) == 0
+                    and _capture
+                    and review_text_len < 40   # texto corto → podría ser nombre de negocio
+                )
+                if need_vision:
+                    print(f"[check] ACTIVA texto corto sin rating → Vision", flush=True)
                     vision_res = await _check_via_vision(url, screenshot_bytes=_capture)
                     if vision_res:
                         v_rating = vision_res.get("rating", 0)
                         v_status = vision_res.get("status", "")
                         if v_status == "ERRONEA" or (0 < v_rating < 5):
-                            res["status"]  = "ERRONEA"
-                            res["detail"]  = vision_res.get("detail") or f"Puntuación {v_rating}/5 — solo se validan las de 5 estrellas"
-                            res["rating"]  = v_rating
+                            res["status"] = "ERRONEA"
+                            res["detail"] = (vision_res.get("detail")
+                                             or f"Puntuación {v_rating}/5 — solo válidas las de 5 estrellas")
+                            res["rating"] = v_rating
                         elif v_status in ("ACTIVA", "ELIMINADA"):
                             res["status"] = v_status
                             res["rating"] = v_rating
                             if v_status == "ELIMINADA":
-                                res["detail"] = vision_res.get("detail", "Reseña eliminada según Vision IA")
+                                res["detail"] = vision_res.get("detail", "Reseña eliminada — Vision IA")
 
                 return res
 
-            # 2d: texto no concluyente → Claude Vision
+            # 2d: texto no concluyente → Vision
             if _capture and len(pw_text) >= 200:
-                print(f"[check] Playwright texto sin señal → Claude Vision", flush=True)
+                print(f"[check] Texto sin señal → Vision", flush=True)
                 vision_res = await _check_via_vision(url, screenshot_bytes=_capture)
                 if vision_res:
                     vision_res["final_url"] = pw_final_url or url
@@ -724,21 +742,20 @@ async def _check_single_review(client: httpx.AsyncClient, url: str, browser=None
                     if vision_res["status"] == "INCIERTA":
                         vision_res["_screenshot"] = _capture
                     return vision_res
+
         else:
-            # Playwright no disponible → fallback a Jina
-            print(f"[check] Playwright no disponible → Jina.ai", flush=True)
+            # Playwright no disponible / falló → Jina fallback
+            print(f"[check] Playwright sin resultado → Jina.ai", flush=True)
             try:
                 jina_text, jina_url = await _fetch_via_jina(client, url)
                 res = _classify_text(jina_text, "Jina")
                 if res:
                     res["final_url"] = jina_url
-                    res["rating"] = 0
+                    res.setdefault("rating", 0)
                     return res
             except Exception as je:
                 print(f"[jina] Error: {je}", flush=True)
 
-            # Último recurso: thum.io + Vision
-            print(f"[check] Jina sin señal → Vision thum.io", flush=True)
             vision_res = await _check_via_vision(url)
             if vision_res:
                 vision_res["final_url"] = url
@@ -754,67 +771,146 @@ async def _check_single_review(client: httpx.AsyncClient, url: str, browser=None
         return _incierta(str(exc)[:120])
 
 
+# ─── Browser pool con recuperación ante fallos ────────────────────────────────
+
+class _BrowserPool:
+    """
+    Mantiene un único proceso Chromium por job.
+    Límita las páginas concurrentes para evitar OOM.
+    Detecta caídas y reinicia el browser automáticamente.
+    """
+
+    MAX_PAGES = 3  # páginas abiertas simultáneamente como máximo
+
+    def __init__(self):
+        self._browser  = None
+        self._ctx      = None
+        self._page_sem = asyncio.Semaphore(self.MAX_PAGES)
+        self._lock     = asyncio.Lock()
+
+    async def start(self):
+        async with self._lock:
+            if self._browser is None:
+                try:
+                    self._ctx, self._browser = await _create_browser()
+                    print("[pool] Browser iniciado", flush=True)
+                except Exception as e:
+                    print(f"[pool] No se pudo iniciar: {e}", flush=True)
+
+    async def fetch(self, url: str) -> tuple[str, bytes | None, str, str]:
+        """Abre una página, navega, devuelve (text, screenshot, final_url, html)."""
+        async with self._page_sem:           # max MAX_PAGES páginas simultáneas
+            browser = await self._get_browser()
+            if browser is None:
+                return "", None, url, ""
+            try:
+                return await _fetch_page(url, browser)
+            except Exception as e:
+                print(f"[pool] Error en página ({url[:50]}): {e}", flush=True)
+                # Marcar el browser como muerto para que se recree
+                async with self._lock:
+                    self._browser = None
+                return "", None, url, ""
+
+    async def _get_browser(self):
+        async with self._lock:
+            if self._browser is None or not self._browser.is_connected():
+                print("[pool] Browser caído — reiniciando…", flush=True)
+                try:
+                    if self._browser:
+                        await self._browser.close()
+                except Exception:
+                    pass
+                try:
+                    self._ctx, self._browser = await _create_browser()
+                    print("[pool] Browser reiniciado OK", flush=True)
+                except Exception as e:
+                    print(f"[pool] No se pudo reiniciar: {e}", flush=True)
+                    self._browser = None
+            return self._browser
+
+    async def close(self):
+        async with self._lock:
+            if self._browser:
+                try:
+                    await self._browser.close()
+                    print("[pool] Browser cerrado", flush=True)
+                except Exception:
+                    pass
+                self._browser = None
+            if self._ctx:
+                try:
+                    await self._ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
+                self._ctx = None
+
+
 # ─── Stream ───────────────────────────────────────────────────────────────────
+
+# Timeout por URL: si tarda más de esto devuelve INCIERTA y libera el slot
+_URL_TIMEOUT = 80   # segundos
 
 async def check_reviews_stream(
     url_items: list[dict],
-    max_concurrent: int = 3,
-    delay_seconds: float = 0.5,
+    max_concurrent: int = 5,
+    delay_seconds: float = 0.3,
 ) -> AsyncGenerator[dict, None]:
-    semaphore = asyncio.Semaphore(max_concurrent)
+    semaphore     = asyncio.Semaphore(max_concurrent)
     result_queue: asyncio.Queue = asyncio.Queue()
-    total = len(url_items)
+    total         = len(url_items)
 
-    # ── Browser pool: un solo navegador para todo el job ─────────────────────
-    _pool_browser  = None
-    _pool_ctx      = None
+    # ── Browser pool ─────────────────────────────────────────────────────────
+    pool = _BrowserPool()
     if _PLAYWRIGHT_AVAILABLE is not False:
-        try:
-            _pool_ctx, _pool_browser = await _create_browser()
-            print("[playwright] Browser pool listo para el job", flush=True)
-        except Exception as e:
-            print(f"[playwright] No se pudo crear browser pool: {e}", flush=True)
-            _pool_browser = None
+        await pool.start()
 
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=18) as client:
 
             async def check_one(idx: int, item: dict):
                 async with semaphore:
                     if idx > 0:
                         await asyncio.sleep(delay_seconds)
-                    result = await _check_single_review(
-                        client, item["url"], browser=_pool_browser
-                    )
+                    try:
+                        result = await asyncio.wait_for(
+                            _check_single_review(client, item["url"], pool=pool),
+                            timeout=_URL_TIMEOUT,
+                        )
+                    except asyncio.TimeoutError:
+                        print(f"[stream] Timeout {_URL_TIMEOUT}s → INCIERTA: {item['url'][:60]}", flush=True)
+                        result = {
+                            "status": "INCIERTA", "detail": f"Timeout después de {_URL_TIMEOUT}s",
+                            "evidence": [], "review_text": "", "rating": 0,
+                            "final_url": item["url"],
+                        }
                     result = {**item, **result, "index": idx}
                 await result_queue.put(result)
 
             tasks = [asyncio.create_task(check_one(i, item)) for i, item in enumerate(url_items)]
 
-            received = 0
+            received  = 0
+            idle_secs = 0
+            # Esperamos hasta completar todas o hasta 10 minutos sin ningún resultado
+            MAX_IDLE  = 600
             while received < total:
                 try:
-                    result = await asyncio.wait_for(result_queue.get(), timeout=120.0)
+                    result = await asyncio.wait_for(result_queue.get(), timeout=10.0)
                     yield result
-                    received += 1
+                    received  += 1
+                    idle_secs  = 0
                 except asyncio.TimeoutError:
-                    break
+                    idle_secs += 10
+                    # Cancelar si todos los tasks terminaron (no deberían quedar pendientes)
+                    done = sum(1 for t in tasks if t.done())
+                    if done >= total or idle_secs >= MAX_IDLE:
+                        print(f"[stream] Saliendo: received={received}/{total} done={done}", flush=True)
+                        break
 
             await asyncio.gather(*tasks, return_exceptions=True)
 
     finally:
-        # Cierre limpio del browser pool al terminar el job
-        if _pool_browser:
-            try:
-                await _pool_browser.close()
-                print("[playwright] Browser pool cerrado", flush=True)
-            except Exception:
-                pass
-        if _pool_ctx:
-            try:
-                await _pool_ctx.__aexit__(None, None, None)
-            except Exception:
-                pass
+        await pool.close()
 
 
 async def check_reviews(url_items, max_concurrent=3, delay_seconds=0.5, progress_callback=None):
