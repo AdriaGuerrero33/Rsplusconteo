@@ -158,6 +158,18 @@ def conflict_note(others: list[dict], match_type: str = "url") -> str:
     return "URL enviada también por " + joined
 
 
+def reset_all() -> int:
+    """
+    Borra todos los registros de contactos/URLs guardados.
+    Retorna el número de entradas eliminadas.
+    """
+    data  = _load()
+    count = sum(len(v) for v in data.get("submissions", {}).values())
+    _save({"submissions": {}})
+    print(f"[contacts] Memoria reseteada — {count} registros eliminados", flush=True)
+    return count
+
+
 def recent_contacts(days: int = 14) -> list[dict]:
     """
     Retorna lista de contactos únicos que han enviado URLs en los últimos `days` días.

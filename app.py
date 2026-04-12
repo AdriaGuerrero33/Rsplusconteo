@@ -366,6 +366,13 @@ async def contacts_recent():
     return {"contacts": _contacts.recent_contacts(days=14)}
 
 
+@app.post("/contacts/reset")
+async def contacts_reset():
+    """Borra toda la memoria de contactos/URLs (comienza de cero)."""
+    deleted = _contacts.reset_all()
+    return {"ok": True, "deleted": deleted}
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
