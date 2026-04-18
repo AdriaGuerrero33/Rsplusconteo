@@ -276,10 +276,11 @@ async def _create_browser():
     return ctx, browser
 
 
-async def _fetch_page(url: str, browser) -> tuple[str, bytes | None, str, str]:
+async def _fetch_page(url: str, browser) -> tuple[str, bytes | None, str, str, int]:
     """
     Abre una nueva página en el browser dado, navega a url y devuelve
-    (texto, screenshot_jpeg, url_final, html_completo).
+    (texto, screenshot_jpeg, url_final, html_completo, rating_js).
+    rating_js = rating obtenido por JS del DOM (0 si no encontrado).
     Cierra el contexto (no el browser) al terminar.
     """
     context = await browser.new_context(
@@ -292,24 +293,54 @@ async def _fetch_page(url: str, browser) -> tuple[str, bytes | None, str, str]:
         try:
             await page.goto(url, wait_until="networkidle", timeout=25000)
         except Exception:
-            # networkidle puede fallar por timeout; la página suele estar suficientemente cargada
             pass
 
         final_url  = page.url
         text       = await page.inner_text("body")
-        html       = await page.content()           # HTML completo renderizado
+        html       = await page.content()
         screenshot = await page.screenshot(full_page=False, type="jpeg", quality=80)
+
+        # ── Extraer rating directamente del DOM via JS ────────────────────────
+        # Mucho más fiable que regex sobre HTML: busca el aria-label del star
+        # widget de la RESEÑA específica, ignorando ratings agregados del negocio
+        # (los agregados son decimales: 4.7, 4,8 — los de reseña son enteros: 4, 5)
+        js_rating = 0
+        try:
+            js_rating = await page.evaluate(r"""() => {
+                const allEls = document.querySelectorAll('[aria-label]');
+                for (const el of allEls) {
+                    const lb = el.getAttribute('aria-label') || '';
+                    // Patrones de rating ENTERO de reseña individual (sin decimales)
+                    let m =
+                        lb.match(/^([1-5])\s+de\s+5\s*estrellas?$/i) ||
+                        lb.match(/^([1-5])\s*estrellas?$/i)           ||
+                        lb.match(/^[Pp]untuaci[oó]n:?\s*([1-5])\s+de\s+5/i) ||
+                        lb.match(/^[Cc]alificaci[oó]n:?\s*([1-5])\s+de\s+5/i) ||
+                        lb.match(/^[Rr]ated?\s+([1-5])\s+out\s+of\s+5/i);
+                    if (m) {
+                        const n = parseInt(m[1], 10);
+                        if (n >= 1 && n <= 5) return n;
+                    }
+                }
+                return 0;
+            }""")
+            if js_rating:
+                print(f"[playwright] JS rating={js_rating}", flush=True)
+        except Exception as je:
+            print(f"[playwright] JS rating error: {je}", flush=True)
+
         print(f"[playwright] OK: {len(text)} chars | final={final_url[:70]}", flush=True)
-        return text, screenshot, final_url, html
+        return text, screenshot, final_url, html, js_rating
     finally:
         await context.close()
 
 
-# Detecta el rating en aria-labels de Google Maps renderizados por Playwright
-# Ejemplos: aria-label="Puntuación: 4 de 5 estrellas"  aria-label="Rated 3 out of 5"
+# Detecta el rating en aria-labels del HTML renderizado — SOLO como fallback
+# cuando JS no pudo evaluar (ej: Playwright sin JS habilitado).
+# IMPORTANTE: usa (?![,.\d]) para no confundir "4,7 de 5" (agregado) con "4 de 5" (reseña).
 _ARIA_RATING_RE = re.compile(
     r'aria-label="[^"]*?(?:[Pp]untuaci[oó]n|[Rr]ated?|[Cc]alificaci[oó]n)[^"]*?'
-    r'([1-5])(?:[,.]0)?\s*(?:de\s*5|out\s+of\s*5|\/5)?[^"]*?"',
+    r'\b([1-5])(?![,.\d])\s*(?:de\s*5|out\s+of\s*5|\/5|estrellas?|stars?)',
     re.IGNORECASE,
 )
 # También detecta atributos data-rating="4" que usa Google en algunos contextos
@@ -339,15 +370,15 @@ def _extract_aria_rating(html: str) -> int:
     return 0
 
 
-async def _fetch_via_playwright(url: str, browser=None) -> tuple[str, bytes | None, str, str]:
+async def _fetch_via_playwright(url: str, browser=None) -> tuple[str, bytes | None, str, str, int]:
     """
     Renderiza la URL con Chromium headless real.
     Si se pasa `browser`, lo reutiliza (pool). Si no, crea uno temporal.
-    Devuelve (texto, screenshot_jpeg, url_final, html_completo).
+    Devuelve (texto, screenshot_jpeg, url_final, html_completo, rating_js).
     """
     global _PLAYWRIGHT_AVAILABLE
     if _PLAYWRIGHT_AVAILABLE is False:
-        return "", None, url, ""
+        return "", None, url, "", 0
 
     _own_browser = browser is None
     _ctx = None
@@ -356,17 +387,17 @@ async def _fetch_via_playwright(url: str, browser=None) -> tuple[str, bytes | No
             from playwright.async_api import async_playwright  # type: ignore  # noqa
             _ctx, browser = await _create_browser()
 
-        text, screenshot, final_url, html = await _fetch_page(url, browser)
+        text, screenshot, final_url, html, js_rating = await _fetch_page(url, browser)
         _PLAYWRIGHT_AVAILABLE = True
-        return text, screenshot, final_url, html
+        return text, screenshot, final_url, html, js_rating
 
     except ImportError:
         _PLAYWRIGHT_AVAILABLE = False
         print("[playwright] No disponible (no instalado)", flush=True)
-        return "", None, url, ""
+        return "", None, url, "", 0
     except Exception as e:
         print(f"[playwright] Error: {e}", flush=True)
-        return "", None, url, ""
+        return "", None, url, "", 0
     finally:
         if _own_browser:
             if browser:
@@ -616,7 +647,7 @@ async def _check_single_review(
             "_screenshot": _capture,
         }
 
-    async def _playwright_fetch() -> tuple[str, bytes | None, str, str]:
+    async def _playwright_fetch() -> tuple[str, bytes | None, str, str, int]:
         if pool is not None:
             return await pool.fetch(url)
         return await _fetch_via_playwright(url, browser=browser)
@@ -667,7 +698,7 @@ async def _check_single_review(
 
         # ── Capa 2: Playwright (Chromium headless) ────────────────────────────
         print(f"[check] Capa 1 sin señal → Playwright", flush=True)
-        pw_text, _capture, pw_final_url, pw_html = await _playwright_fetch()
+        pw_text, _capture, pw_final_url, pw_html, js_rating = await _playwright_fetch()
 
         if pw_text:
             # 2a: redirección a página de negocio → ELIMINADA
@@ -687,31 +718,42 @@ async def _check_single_review(
                     "_screenshot": _capture,
                 }
 
-            # 2b: rating de aria-labels (estrellas SVG → no en inner_text)
-            aria_rating = _extract_aria_rating(pw_html) if pw_html else 0
+            # 2b: rating del DOM via JS (fuente primaria, más fiable que aria-label regex)
+            # Fallback: aria-label regex solo si JS no encontró nada
+            pw_rating = js_rating or (_extract_aria_rating(pw_html) if pw_html else 0)
+            print(f"[check] pw_rating={pw_rating} (js={js_rating})", flush=True)
 
-            # 2c: clasificar texto
+            # 2c: si tenemos rating claro de 1-4 → ERRONEA directamente
+            if 0 < pw_rating < 5:
+                rev = _classify_text(pw_text, "Playwright")
+                review_text = (rev or {}).get("review_text", "")
+                print(f"[check] Rating {pw_rating}/5 → ERRONEA", flush=True)
+                return {
+                    "status": "ERRONEA",
+                    "detail": f"Puntuación {pw_rating}/5 — solo se validan las de 5 estrellas",
+                    "evidence": [f"DOM rating={pw_rating}"],
+                    "review_text": review_text,
+                    "rating": pw_rating,
+                    "final_url": pw_final_url or url,
+                }
+
+            # 2d: clasificar texto
             res = _classify_text(pw_text, "Playwright")
             if res:
                 res["final_url"] = pw_final_url or url
-                res.setdefault("rating", 0)
+                # Aplicar rating del DOM si el texto no lo detectó
+                if pw_rating and res.get("rating", 0) == 0:
+                    res["rating"] = pw_rating
 
-                # Aplicar aria_rating si el texto no lo detectó
-                if aria_rating and res.get("rating", 0) == 0:
-                    res["rating"] = aria_rating
-                    if 0 < aria_rating < 5:
-                        res["status"] = "ERRONEA"
-                        res["detail"] = f"Puntuación {aria_rating}/5 — solo se validan las de 5 estrellas"
-
-                # Solo llamar Vision si el resultado es ACTIVA, el rating sigue
-                # siendo 0 (desconocido) Y el texto encontrado parece corto/sospechoso
-                # (texto largo con rating 0 → probablemente 5 estrellas sin aria-label)
+                # Solo llamar Vision si:
+                #  - resultado es ACTIVA sin rating conocido Y texto corto (<40 chars)
+                #    (texto corto puede ser un nombre de negocio mal clasificado)
                 review_text_len = len((res.get("review_text") or "").strip())
                 need_vision = (
                     res["status"] == "ACTIVA"
                     and res.get("rating", 0) == 0
                     and _capture
-                    and review_text_len < 40   # texto corto → podría ser nombre de negocio
+                    and review_text_len < 40
                 )
                 if need_vision:
                     print(f"[check] ACTIVA texto corto sin rating → Vision", flush=True)
@@ -724,21 +766,25 @@ async def _check_single_review(
                             res["detail"] = (vision_res.get("detail")
                                              or f"Puntuación {v_rating}/5 — solo válidas las de 5 estrellas")
                             res["rating"] = v_rating
-                        elif v_status in ("ACTIVA", "ELIMINADA"):
-                            res["status"] = v_status
-                            res["rating"] = v_rating
-                            if v_status == "ELIMINADA":
-                                res["detail"] = vision_res.get("detail", "Reseña eliminada — Vision IA")
-
+                        elif v_status == "ELIMINADA":
+                            res["status"] = "ELIMINADA"
+                            res["detail"] = vision_res.get("detail", "Reseña eliminada — Vision IA")
+                            res["rating"] = 0
+                        elif v_status == "INCIERTA":
+                            # Vision no está segura → INCIERTA para revisión manual
+                            res["status"] = "INCIERTA"
+                            res["detail"] = "Puntuación no determinada — revisión manual requerida"
+                            res["_screenshot"] = _capture
+                        # Si Vision dice ACTIVA con rating 5 o desconocido → mantener ACTIVA
                 return res
 
-            # 2d: texto no concluyente → Vision
+            # 2e: texto no concluyente → Vision
             if _capture and len(pw_text) >= 200:
                 print(f"[check] Texto sin señal → Vision", flush=True)
                 vision_res = await _check_via_vision(url, screenshot_bytes=_capture)
                 if vision_res:
                     vision_res["final_url"] = pw_final_url or url
-                    vision_res.setdefault("rating", aria_rating)
+                    vision_res.setdefault("rating", pw_rating)
                     if vision_res["status"] == "INCIERTA":
                         vision_res["_screenshot"] = _capture
                     return vision_res
@@ -797,20 +843,19 @@ class _BrowserPool:
                 except Exception as e:
                     print(f"[pool] No se pudo iniciar: {e}", flush=True)
 
-    async def fetch(self, url: str) -> tuple[str, bytes | None, str, str]:
-        """Abre una página, navega, devuelve (text, screenshot, final_url, html)."""
+    async def fetch(self, url: str) -> tuple[str, bytes | None, str, str, int]:
+        """Abre una página, navega, devuelve (text, screenshot, final_url, html, js_rating)."""
         async with self._page_sem:           # max MAX_PAGES páginas simultáneas
             browser = await self._get_browser()
             if browser is None:
-                return "", None, url, ""
+                return "", None, url, "", 0
             try:
                 return await _fetch_page(url, browser)
             except Exception as e:
                 print(f"[pool] Error en página ({url[:50]}): {e}", flush=True)
-                # Marcar el browser como muerto para que se recree
                 async with self._lock:
                     self._browser = None
-                return "", None, url, ""
+                return "", None, url, "", 0
 
     async def _get_browser(self):
         async with self._lock:
